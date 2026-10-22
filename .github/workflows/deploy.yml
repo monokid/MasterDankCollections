@@ -1,0 +1,54 @@
+name: Deploy to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      MDC_PASSWORDS: ${{ secrets.MDC_PASSWORDS }}
+      MDC_INPUT_KEY: ${{ secrets.MDC_INPUT_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Check secrets are set
+        run: |
+          [ -n "$MDC_PASSWORDS" ] || { echo "::error::Repository secret MDC_PASSWORDS is empty or missing"; exit 1; }
+          [ -n "$MDC_INPUT_KEY" ] || { echo "::error::Repository secret MDC_INPUT_KEY is empty or missing"; exit 1; }
+      - run: npm ci
+      # The plaintext crawl/Spotify/weather files are never committed; only the
+      # sealed data/inputs.enc is. Open it, rebuild the catalogue, seal it again.
+      - run: npm run inputs:open
+      - run: npm run verify
+      - run: npm run distill
+      - run: npm run seal
+      # The build fails if any plaintext data or catalogue text is left in dist.
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

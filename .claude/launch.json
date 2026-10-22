@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mdc",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--port", "4321", "--strictPort"],
+      "autoPort": false,
+      "port": 4321
+    }
+  ]
+}

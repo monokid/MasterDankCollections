@@ -1,0 +1,34 @@
+{
+  "name": "masterdankcollections",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "distill": "tsx tools/distill.ts",
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "verify": "tsc --noEmit && tsx tools/guard.ts && tsx tools/distill.test.ts && tsx tools/analytics.test.ts && tsx tools/planner.test.ts && tsx tools/moon.test.ts && tsx tools/nightstats.test.ts && tsx tools/enrich.test.ts && tsx tools/vault.test.ts",
+    "spotify": "tsx tools/spotify.ts",
+    "enrich": "tsx tools/enrich.ts",
+    "weather": "tsx tools/weather.ts",
+    "seal": "node --env-file-if-exists=.env.local --import tsx tools/seal.ts",
+    "data": "npm run distill && npm run seal",
+    "inputs:seal": "node --env-file-if-exists=.env.local --import tsx tools/inputs.ts seal",
+    "inputs:open": "node --env-file-if-exists=.env.local --import tsx tools/inputs.ts open"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
+  },
+  "dependencies": {
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@fontsource-variable/figtree": "^5.3.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  }
+}

@@ -1,0 +1,23 @@
+crawler/build/
+crawler/dist/
+crawler/*.spec
+__pycache__/
+*.pyc
+.mdc-cache.json
+node_modules/
+dist/
+launcher/build/
+launcher/dist/
+launcher/*.spec
+# Spotify account handles -> names (other people's ids; never commit)
+tools/spotify-users.local.json
+tsconfig.tsbuildinfo
+
+# secrets: passwords and the key that seals data/inputs.enc (also kept as GitHub Actions secrets)
+.env
+.env.*
+
+# plaintext inputs: only the sealed data/inputs.enc is tracked (npm run inputs:seal / inputs:open)
+data/*.json
+# generated in CI by `npm run seal`: ciphertext and aggregates, rebuilt every deploy
+public/data/*
