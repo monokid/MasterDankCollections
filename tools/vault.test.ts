@@ -89,7 +89,7 @@ await test("inputs seal/open roundtrip; wrong key and tampering fail", async () 
 });
 
 await test("seal fails loudly without passwords", () => {
-  assert.throws(() => passwordsFromEnv(undefined), /MDC_PASSWORDS/);
+  assert.throws(() => passwordsFromEnv(""), /MDC_PASSWORDS/);
   assert.throws(() => passwordsFromEnv(" , "), /MDC_PASSWORDS/);
   assert.deepEqual(passwordsFromEnv(" a , b "), ["a", "b"]);
 });
