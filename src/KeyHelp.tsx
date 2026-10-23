@@ -3,8 +3,10 @@ import { useEffect, useRef } from "react";
 const ROWS: Array<[keys: string[][], what: string]> = [
   [[["/"]], "Search from anywhere"],
   [[["g"], ["s"]], "Go to Search"],
+  [[["g"], ["m"]], "Go to Music"],
   [[["g"], ["t"]], "Go to Timeline"],
   [[["g"], ["b"]], "Go to Browse"],
+  [[["g"], ["p"]], "Go to People"],
   [[["g"], ["i"]], "Go to Insights"],
   [[["Esc"]], "Close a track, or this box"],
   [[["?"]], "Show this help"],

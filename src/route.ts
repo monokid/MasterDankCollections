@@ -11,7 +11,10 @@
  *    #/song/t123           one track's detail page (track ids are positional,
  *                          so a link can go stale after the catalogue is rebuilt;
  *                          an unknown id just lands on Search)
- *    #/plan  #/resolve     built but off the menu; reachable only by URL
+ *    #/people              the people gallery;  #/people/<personId>  one profile
+ *    #/music               the library wall;    #/music/artist/<artistId>  one discography
+ *                          (unknown ids fall back to the gallery / wall)
+ *    #/plan  #/resolve    built but off the menu; reachable only by URL
  */
 
 export type Route =
@@ -23,7 +26,9 @@ export type Route =
   | { name: "insights" }
   | { name: "plan" }
   | { name: "resolve" }
-  | { name: "song"; id: string };
+  | { name: "song"; id: string }
+  | { name: "people"; id: string | null }
+  | { name: "music"; id: string | null };
 
 export const HOME: Route = { name: "home" };
 
@@ -45,6 +50,17 @@ export function parseRoute(hash: string): Route {
       const id = decodeURIComponent(rest[0]);
       if (id) return { name: head, id };
     }
+    if (head === "people") {
+      if (rest.length === 0) return { name: "people", id: null };
+      if (rest.length === 1 && rest[0]) { const id = decodeURIComponent(rest[0]); if (id) return { name: "people", id }; }
+    }
+    if (head === "music") {
+      if (rest.length === 0) return { name: "music", id: null };
+      if (rest.length === 2 && rest[0] === "artist" && rest[1]) {
+        const id = decodeURIComponent(rest[1]);
+        if (id) return { name: "music", id };
+      }
+    }
   } catch { /* malformed %-escape: treat as unknown */ }
   return HOME;
 }
@@ -54,6 +70,8 @@ export function formatRoute(r: Route): string {
     case "home": return "#/";
     case "search": return r.q ? `#/search?${new URLSearchParams({ q: r.q })}` : "#/search";
     case "night": case "song": return `#/${r.name}/${encodeURIComponent(r.id)}`;
+    case "people": return r.id ? `#/people/${encodeURIComponent(r.id)}` : "#/people";
+    case "music": return r.id ? `#/music/artist/${encodeURIComponent(r.id)}` : "#/music";
     default: return `#/${r.name}`;
   }
 }
@@ -64,6 +82,7 @@ const SITE = "Master Dank Collections";
 const NAMES: Record<Route["name"], string> = {
   home: "", search: "Search", timeline: "Timeline", browse: "Browse", night: "Night",
   insights: "Insights", plan: "Planner", resolve: "Resolver", song: "Track",
+  people: "People", music: "Music",   // never a person's or artist's name: titles stay generic
 };
 
 /** The document title for a route; `detail` is a more specific name (a night's

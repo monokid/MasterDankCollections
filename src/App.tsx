@@ -14,9 +14,10 @@ import { catalogIndex } from "./catalogIndex.ts";
 import { isShown, visibleCatalog } from "./config.ts";
 import { getBundle, hasSession, prefetch, resume, type Bundle } from "./vault.ts";
 import type { WeatherMap } from "./weather.ts";
+import type { EnrichMap } from "./enrich.ts";
 import type { Range } from "./analytics.ts";
 import { HOME, formatRoute, parseRoute, titleFor, type Route } from "./route.ts";
-import { createKeyMachine, isTypingTarget } from "./keys.ts";
+import { createKeyMachine, isTypingTarget, type GotoView } from "./keys.ts";
 import { getSearchQuery, requestSearchFocus, setSearchQuery, subscribeSearchQuery } from "./events.ts";
 
 // Home is the only thing in the first download. Every page is its own chunk,
@@ -27,12 +28,14 @@ const BrowseView = lazyPage(() => import("./BrowseView.tsx"));
 const Insights = lazyPage(() => import("./Insights.tsx"));
 const Planner = lazyPage(() => import("./Planner.tsx"));
 const Resolver = lazyPage(() => import("./Resolver.tsx"));
+const PeoplePage = lazyPage(() => import("./People.tsx"));
+const MusicPage = lazyPage(() => import("./Music.tsx"));
 const TrackDetail = lazyPage(() => import("./TrackDetail.tsx"));
 
-type View = "home" | "search" | "timeline" | "browse" | "insights" | "plan" | "resolve";
-type MenuView = "search" | "timeline" | "browse" | "insights";
+type View = "home" | "search" | "music" | "timeline" | "browse" | "people" | "insights" | "plan" | "resolve";
+type MenuView = GotoView;
 
-const MENU: readonly MenuView[] = ["search", "timeline", "browse", "insights"];
+const MENU: readonly MenuView[] = ["search", "music", "timeline", "browse", "people", "insights"];
 const LAST_VIEW = "mdc.view";
 
 /** The view this tab session last used (not a secret: just a tab name). */
@@ -44,12 +47,14 @@ function lastView(): MenuView {
   return "search";
 }
 
-function routeOf(view: View, detail: Track | null, eventId: string | null): Route {
+function routeOf(view: View, detail: Track | null, eventId: string | null, personId: string | null, artistId: string | null): Route {
   if (detail) return { name: "song", id: detail.id };
   switch (view) {
     case "home": return HOME;
     case "search": return { name: "search", q: getSearchQuery() };
     case "browse": return eventId ? { name: "night", id: eventId } : { name: "browse" };
+    case "people": return { name: "people", id: personId };
+    case "music": return { name: "music", id: artistId };
     default: return { name: view };
   }
 }
@@ -78,6 +83,9 @@ export default function App() {
   const [range, setRange] = useState<Range | null>(null);
   const [selectedNight, setSelectedNight] = useState<string | null>(null);
   const [eventId, setEventId] = useState<string | null>(null);
+  const [personId, setPersonId] = useState<string | null>(null);
+  const [artistId, setArtistId] = useState<string | null>(null);
+  const [enrich, setEnrich] = useState<EnrichMap | null>(null);
   const [weather, setWeather] = useState<WeatherMap>({});
   const [help, setHelp] = useState(false);
 
@@ -107,6 +115,7 @@ export default function App() {
     if (loaded.current?.bundle !== b) {
       loaded.current = { bundle: b, cat: visibleCatalog(b.catalog) };
       setWeather(b.weather as WeatherMap);
+      setEnrich(b.enrich?.songs ?? null);
     }
     return loaded.current.cat;
   }, []);
@@ -136,6 +145,19 @@ export default function App() {
         const t = ix.track.get(r.id);
         if (t) { setDetail(t); setView((v) => (v === "home" ? "search" : v)); }
         else { applied = { name: "search", q: getSearchQuery() }; setView("search"); setDetail(null); }
+        break;
+      }
+      case "people": {
+        // An unknown person is just the gallery.
+        const known = r.id !== null && ix.person.has(r.id);
+        if (!known) applied = { name: "people", id: null };
+        setPersonId(known ? r.id : null); setView("people"); setDetail(null);
+        break;
+      }
+      case "music": {
+        const known = r.id !== null && ix.artist.has(r.id);
+        if (!known) applied = { name: "music", id: null };
+        setArtistId(known ? r.id : null); setView("music"); setDetail(null);
         break;
       }
       default:
@@ -180,7 +202,7 @@ export default function App() {
   useEffect(() => {
     if (!cat) return;
     return whenIdle(() => {
-      for (const p of [SongSearch, TimelinePage, BrowseView, Insights, TrackDetail]) p.preload();
+      for (const p of [SongSearch, TimelinePage, BrowseView, Insights, MusicPage, PeoplePage, TrackDetail]) p.preload();
       void import("./NightPage.tsx");
     }, 4000);
   }, [cat]);
@@ -263,14 +285,14 @@ export default function App() {
   // (the visitor's deep link must survive until it can be followed).
   useLayoutEffect(() => {
     if (!cat || wash) return;
-    const route = routeOf(view, detail, eventId);
+    const route = routeOf(view, detail, eventId, personId, artistId);
     if (urlIs(route)) return;
     scrolls.current.set(keyNow.current, leavingTop.current);
     keyNow.current = ++keyTop.current;
     window.history.pushState({ k: keyNow.current }, "", formatRoute(route));
     restoreToken.current++;
     scrollRef.current?.scrollTo({ top: 0, behavior: "instant" });
-  }, [cat, wash, view, detail, eventId]);
+  }, [cat, wash, view, detail, eventId, personId, artistId]);
 
   // The search box reports every keystroke; mirror it quietly (replace, not
   // push, so Back does not step through letters).
@@ -296,7 +318,7 @@ export default function App() {
 
   // ------------------------------------------------------ title & announce
 
-  const route = useMemo(() => routeOf(view, detail, eventId), [view, detail, eventId]);
+  const route = useMemo(() => routeOf(view, detail, eventId, personId, artistId), [view, detail, eventId, personId, artistId]);
   const unlocked = cat !== null;
   const night = route.name === "night" ? route.id : null;
   useEffect(() => {
@@ -314,7 +336,11 @@ export default function App() {
 
   const keys = useRef(createKeyMachine());
   const goView = useCallback((v: MenuView) => {
-    nav(() => { setView(v); setDetail(null); setEmerge(false); });
+    nav(() => {
+      if (v === "people") setPersonId(null);       // the tab and the key lead to the gallery / wall
+      if (v === "music") setArtistId(null);
+      setView(v); setDetail(null); setEmerge(false);
+    });
   }, [nav]);
 
   useEffect(() => {
@@ -356,15 +382,37 @@ export default function App() {
     nav(() => { setEventId(id); setView("browse"); setDetail(null); });
   }, [nav]);
   const setNight = useCallback((id: string | null) => nav(() => setEventId(id)), [nav]);
+  const openPerson = useCallback((id: string | null) => {
+    const ok = id !== null && !!catRef.current && catalogIndex(catRef.current).person.has(id);
+    nav(() => { setPersonId(ok ? id : null); setView("people"); setDetail(null); setEmerge(false); });
+  }, [nav]);
+  const openArtist = useCallback((id: string | null) => {
+    const ok = id !== null && !!catRef.current && catalogIndex(catRef.current).artist.has(id);
+    nav(() => { setArtistId(ok ? id : null); setView("music"); setDetail(null); setEmerge(false); });
+  }, [nav]);
+  // A song opens its history: the track detail of its most recent play on a
+  // dated night. A song never brought to a night has no such page, so its artist opens instead.
+  const openSong = useCallback((songId: string) => {
+    const c = catRef.current;
+    if (!c) return;
+    import("./songstats.ts").then(({ songHistory }) => {
+      const ix = catalogIndex(c);
+      const t = ix.track.get(songHistory(c, songId).occurrences[0]?.trackId ?? "");
+      if (t) open(t);
+      else openArtist(songId.split("|")[0]);
+    }).catch(() => openArtist(songId.split("|")[0]));
+  }, [open, openArtist]);
   const onInsights = useCallback(() => nav(() => setView("insights")), [nav]);
 
   // Plan and Resolve stay built but are off the menu (#/plan and #/resolve still open them).
-  const leftTabs: [View, string][] = [["search", "Search"], ["timeline", "Timeline"]];
-  const rightTabs: [View, string][] = [["browse", "Browse"], ["insights", "Insights"]];
+  const leftTabs: [View, string][] = [["search", "Search"], ["music", "Music"], ["timeline", "Timeline"]];
+  const rightTabs: [View, string][] = [["browse", "Browse"], ["people", "People"], ["insights", "Insights"]];
   const pick = (v: View) => {
     nav(() => {
       // Clicking Browse while already on a night goes back to the list.
       if (v === "browse" && view === "browse" && !detail) setEventId(null);
+      if (v === "people") setPersonId(null);
+      if (v === "music") setArtistId(null);
       setView(v); setDetail(null); setEmerge(false);
     });
   };
@@ -381,11 +429,15 @@ export default function App() {
 
   // ---------------------------------------------------------------- pages
 
+  // Whatever the state says, a page is never handed an id the catalogue lacks.
+  const validPerson = cat && personId && catalogIndex(cat).person.has(personId) ? personId : null;
+  const validArtist = cat && artistId && catalogIndex(cat).artist.has(artistId) ? artistId : null;
   let page;
   if (!cat || (view === "home" && !detail)) {
     page = <Home leaving={wash !== null} onEnter={enter} />;
   } else if (detail) {
-    page = <TrackDetail track={detail} cat={cat} onClose={closeDetail} onTrace={onTrace} onOpenNight={openNight} onOpenTrack={open} />;
+    page = <TrackDetail track={detail} cat={cat} onClose={closeDetail} onTrace={onTrace} onOpenNight={openNight} onOpenTrack={open}
+        onOpenArtist={openArtist} onOpenPerson={openPerson} />;
   } else if (view === "search") {
     page = <SongSearch cat={cat} onOpen={open} onTrace={onTrace} />;
   } else if (view === "timeline") {
@@ -397,6 +449,16 @@ export default function App() {
     );
   } else if (view === "browse") {
     page = <BrowseView cat={cat} weather={weather} onOpen={open} eventId={eventId} setEventId={setNight} />;
+  } else if (view === "music") {
+    page = (
+      <MusicPage cat={cat} enrich={enrich} artistId={validArtist} onOpenArtist={openArtist}
+        onOpenSong={openSong} onOpenNight={openNight} onOpenPerson={openPerson} onTrace={onTrace} />
+    );
+  } else if (view === "people") {
+    page = (
+      <PeoplePage cat={cat} enrich={enrich} personId={validPerson} onOpenPerson={openPerson}
+        onOpenNight={openNight} onOpenSong={openSong} onOpenArtist={openArtist} onTrace={onTrace} />
+    );
   } else if (view === "insights") {
     page = <Insights cat={cat} range={range} onRange={setRange} onTrace={onTrace} onOpenNight={openNight} />;
   } else if (view === "plan") {

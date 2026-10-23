@@ -11,12 +11,15 @@
  *    "empty"    it opened, but holds no usable catalogue
  *  A wrong password is not an error: unlock() resolves false. */
 import type { Catalog } from "./catalog.ts";
+import type { EnrichMap } from "./enrich.ts";
 import { exportDataKey, importDataKey, openBundleWithKey, openWithDataKey } from "./vaultcrypto.ts";
 
 export interface Bundle {
   catalog: Catalog;
   /** ISO date -> weather for that night; empty when none was fetched. */
   weather: Record<string, unknown>;
+  /** Public-database facts about songs (data/enrich.json); null when none shipped. */
+  enrich?: { songs: EnrichMap } | null;
 }
 
 export type VaultErrorCode = "network" | "http" | "corrupt" | "empty";
@@ -40,7 +43,7 @@ export interface VaultDeps {
 }
 
 export function parseBundle(payload: Uint8Array): Bundle {
-  let p: { catalog?: Catalog; weather?: Record<string, unknown> } | null;
+  let p: { catalog?: Catalog; weather?: Record<string, unknown>; enrich?: { songs?: unknown } | null } | null;
   try { p = JSON.parse(new TextDecoder().decode(payload)); }
   catch { throw new VaultError("corrupt", "The vault contents are not readable"); }
   const c = p?.catalog;
@@ -50,7 +53,9 @@ export function parseBundle(payload: Uint8Array): Bundle {
       !Array.isArray(c.songs) || !Array.isArray(c.artists) || !Array.isArray(c.phases)) {
     throw new VaultError("empty", "The vault has no usable catalogue in it");
   }
-  return { catalog: c, weather: p?.weather ?? {} };
+  const es = p?.enrich?.songs;
+  const enrich = es && typeof es === "object" && !Array.isArray(es) ? { songs: es as EnrichMap } : null;
+  return { catalog: c, weather: p?.weather ?? {}, enrich };
 }
 
 export function createVault(deps: VaultDeps) {

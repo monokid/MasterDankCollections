@@ -71,3 +71,10 @@ main.scroll:focus { outline: none; }
 .kh .then { color: var(--ink-faint); margin: 0 4px; font-size: 12px; }
 .kh-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .kh-foot span { color: var(--ink-faint); font-size: 12.5px; }
+
+/* Three tabs a side: tighten them on narrower desktops so the bar still fits
+   either side of the logo before the mobile layout (<= 720px) takes over. */
+@media (min-width: 721px) and (max-width: 1040px) {
+  .topbar { gap: 10px; padding-left: 14px; padding-right: 14px; }
+  .tab { padding: 8px 11px; font-size: 13.5px; }
+}

@@ -25,10 +25,13 @@ const BUCKET_WORDS: Record<string, string> = {
 /** One track: what the library knows about the song and artist, and where
  *  each field of this file came from. `onOpenNight` / `onOpenTrack` are optional;
  *  without them the links fall back to the hash routes (#/night/.., #/song/..). */
-export default function TrackDetail({ track, cat, onClose, onTrace, onOpenNight, onOpenTrack }: {
+export default function TrackDetail({ track, cat, onClose, onTrace, onOpenNight, onOpenTrack, onOpenArtist, onOpenPerson }: {
   track: Track; cat: Catalog; onClose: () => void; onTrace: (t: Trace) => void;
   onOpenNight?: (eventId: string) => void;
   onOpenTrack?: (t: Track) => void;
+  /** Open the artist on the Music page / a person on the People page. */
+  onOpenArtist?: (artistId: string) => void;
+  onOpenPerson?: (personId: string) => void;
 }) {
   const ix = catalogIndex(cat);
   const { toast, node: toastNode } = useToast();
@@ -87,6 +90,20 @@ export default function TrackDetail({ track, cat, onClose, onTrace, onOpenNight,
     );
   };
 
+  const artistLink = (children: ReactNode) => (
+    <a className="dt-link" href={formatRoute({ name: "music", id: artistId })}
+      onClick={onOpenArtist && artistId ? (e) => { if (plain(e)) { e.preventDefault(); onOpenArtist(artistId); } } : undefined}>
+      {children}
+    </a>
+  );
+  const personLink = (children: ReactNode) => person ? (
+    <a className="dt-link" href={formatRoute({ name: "people", id: person.id })}
+      onClick={onOpenPerson ? (e) => { if (plain(e)) { e.preventDefault(); onOpenPerson(person.id); } } : undefined}>
+      {children}
+    </a>
+  ) : children;
+  const hasArtistPage = !!artistId && ix.artist.has(artistId);
+
   const played = sh && sh.nights > 0;
   const spot = spotifyUrl(track.spotifyUri);
   const q = track.audio;
@@ -98,10 +115,19 @@ export default function TrackDetail({ track, cat, onClose, onTrace, onOpenNight,
       <header className="panel dt-head">
         <h1>{title ?? "(untitled)"}</h1>
         <p className="dt-artist">
-          {artistName && ah && ah.nights > 0
-            ? <button className="dt-linkbtn" onClick={traceArtist} title="Show this artist on the timeline">{artistName}</button>
-            : <span>{artistName ?? "unknown artist"}</span>}
-          {person && <span className="dt-by"> · brought by {person.name}</span>}
+          {artistName && hasArtistPage
+            ? (
+              <>
+                {artistLink(artistName)}
+                {ah && ah.nights > 0 && (
+                  <> <button className="dt-linkbtn" onClick={traceArtist} title="Show this artist on the timeline">on timeline</button></>
+                )}
+              </>
+            )
+            : artistName && ah && ah.nights > 0
+              ? <button className="dt-linkbtn" onClick={traceArtist} title="Show this artist on the timeline">{artistName}</button>
+              : <span>{artistName ?? "unknown artist"}</span>}
+          {person && <span className="dt-by"> · brought by {personLink(person.name)}</span>}
         </p>
 
         <p className="dt-verdict" data-verdict={sh?.verdict ?? "unknown"}>
@@ -315,7 +341,7 @@ export default function TrackDetail({ track, cat, onClose, onTrace, onOpenNight,
           <dt>Artist</dt><dd>{track.artist ?? "—"}{via("artist")}</dd>
           <dt>Title</dt><dd>{track.title ?? "—"}{via("title")}</dd>
           {track.album && <><dt>Album</dt><dd>{track.album}</dd></>}
-          <dt>Brought by</dt><dd>{person?.name ?? "unknown"}{via("person")}</dd>
+          <dt>Brought by</dt><dd>{person ? personLink(person.name) : "unknown"}{via("person")}</dd>
           {twin && (
             <>
               <dt>{track.flags.includes("anon") ? "Named as" : "Anonymised as"}</dt>

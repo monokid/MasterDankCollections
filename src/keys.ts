@@ -2,13 +2,15 @@
  *  (never while typing, never with a modifier, "g" then a letter) are testable.
  *
  *    /        focus search          ?   keyboard help         Esc  close / back out
- *    g s|t|b|i   go to Search / Timeline / Browse / Insights  (like Gmail)  */
+ *    g s|m|t|b|p|i   go to Search / Music / Timeline / Browse / People / Insights  (like Gmail)  */
+
+export type GotoView = "search" | "music" | "timeline" | "browse" | "people" | "insights";
 
 export type KeyAction =
   | { type: "focus-search" }
   | { type: "help" }
   | { type: "escape" }
-  | { type: "goto"; to: "search" | "timeline" | "browse" | "insights" };
+  | { type: "goto"; to: GotoView };
 
 export interface KeyInfo {
   key: string;
@@ -26,8 +28,8 @@ export function isTypingTarget(t: EventTarget | null): boolean {
 }
 
 export const CHORD_MS = 1500;
-const GOTO: Record<string, "search" | "timeline" | "browse" | "insights"> = {
-  s: "search", t: "timeline", b: "browse", i: "insights",
+const GOTO: Record<string, GotoView> = {
+  s: "search", m: "music", t: "timeline", b: "browse", p: "people", i: "insights",
 };
 
 export function createKeyMachine(now: () => number = () => Date.now()) {

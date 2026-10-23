@@ -17,6 +17,8 @@ test("every route round-trips through the hash", () => {
     { name: "night", id: "2026-05-01" }, { name: "night", id: "collection-favs" },
     { name: "insights" }, { name: "plan" }, { name: "resolve" }, { name: "song", id: "t123" },
     { name: "song", id: "a/b?c#d" },
+    { name: "people", id: null }, { name: "people", id: "p3" }, { name: "people", id: "a/b c" },
+    { name: "music", id: null }, { name: "music", id: "pink floyd" }, { name: "music", id: "a/b?c" },
   ];
   for (const r of routes) assert.deepEqual(parseRoute(formatRoute(r)), r, formatRoute(r));
 });
@@ -26,6 +28,20 @@ test("the documented URLs parse as documented", () => {
   assert.deepEqual(parseRoute("#/night/2026-05-01"), { name: "night", id: "2026-05-01" });
   assert.deepEqual(parseRoute("#/song/t5"), { name: "song", id: "t5" });
   assert.deepEqual(parseRoute("#/timeline/"), { name: "timeline" });
+});
+
+test("people and music routes parse as documented, with generic titles", () => {
+  assert.deepEqual(parseRoute("#/people"), { name: "people", id: null });
+  assert.deepEqual(parseRoute("#/people/p3"), { name: "people", id: "p3" });
+  assert.deepEqual(parseRoute("#/music"), { name: "music", id: null });
+  assert.deepEqual(parseRoute("#/music/artist/a1"), { name: "music", id: "a1" });
+  assert.equal(formatRoute({ name: "music", id: "a1" }), "#/music/artist/a1");
+  for (const h of ["#/music/a1", "#/music/artist", "#/music/artist/", "#/people/a/b", "#/music/artist/a/b", "#/people/%E0%A4%A"]) {
+    assert.deepEqual(parseRoute(h), { name: "home" }, h);
+  }
+  assert.equal(titleFor({ name: "people", id: null }), "People · Master Dank Collections");
+  assert.equal(titleFor({ name: "people", id: "p3" }), "People · Master Dank Collections", "no names in titles");
+  assert.equal(titleFor({ name: "music", id: "a1" }), "Music · Master Dank Collections");
 });
 
 test("empty, unknown and malformed hashes land on Home instead of throwing", () => {
@@ -68,10 +84,10 @@ test("nothing fires while typing, or with a modifier held", () => {
   assert.equal(m.feed(k("g", { metaKey: true })), null);
 });
 
-test("g then s/t/b/i jumps; the chord expires, and typing in between disarms it", () => {
+test("g then s/m/t/b/p/i jumps; the chord expires, and typing in between disarms it", () => {
   let t = 0;
   const m = createKeyMachine(() => t);
-  for (const [key, to] of [["s", "search"], ["t", "timeline"], ["b", "browse"], ["i", "insights"]] as const) {
+  for (const [key, to] of [["s", "search"], ["m", "music"], ["t", "timeline"], ["b", "browse"], ["p", "people"], ["i", "insights"]] as const) {
     assert.equal(m.feed(k("g")), null);
     assert.deepEqual(m.feed(k(key)), { type: "goto", to });
   }

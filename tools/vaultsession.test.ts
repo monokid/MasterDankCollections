@@ -8,6 +8,7 @@ const PW = "throwaway-session";
 const enc = (o: unknown) => new TextEncoder().encode(JSON.stringify(o));
 const cat = { tracks: [], events: [], people: [], songs: [], artists: [], phases: [] };
 const good = await sealBundle(enc({ catalog: cat, weather: { "2020-01-01": 1 } }), [PW]);
+const enriched = await sealBundle(enc({ catalog: cat, enrich: { schema: 1, songs: { "a|b": { year: 1999 } } } }), [PW]);
 const other = await sealBundle(enc({ catalog: cat }), ["throwaway-other"]);
 const hollow = await sealBundle(enc({ nothing: true }), [PW]);
 
@@ -42,6 +43,15 @@ await test("wrong word resolves false, right word opens and holds the session", 
   assert.deepEqual(v.getBundle()!.weather, { "2020-01-01": 1 });
   assert.ok(mem.getItem("mdc.vk"));
   assert.ok(v.hasSession());
+});
+
+await test("the bundle exposes enrich when sealed in, and null when absent", async () => {
+  const withIt = make(async () => enriched);
+  await withIt.v.unlock(PW);
+  assert.deepEqual(withIt.v.getBundle()!.enrich, { songs: { "a|b": { year: 1999 } } });
+  const without = make(async () => good);
+  await without.v.unlock(PW);
+  assert.equal(without.v.getBundle()!.enrich, null);
 });
 
 await test("two quick submits are queued: both settle, the right one wins, ciphertext fetched once", async () => {
