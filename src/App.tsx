@@ -335,7 +335,9 @@ export default function App() {
           if (l.view !== "search" || l.detail) goView("search");
           requestSearchFocus();
           break;
-        case "goto": if (open) goView(a.to); break;
+        // Cancel the key itself: the destination may focus a text box in this same
+        // key press, and the "s" of "g then s" would be typed into it.
+        case "goto": if (open) { e.preventDefault(); goView(a.to); } break;
       }
     };
     window.addEventListener("keydown", onKey);
@@ -383,7 +385,7 @@ export default function App() {
   if (!cat || (view === "home" && !detail)) {
     page = <Home leaving={wash !== null} onEnter={enter} />;
   } else if (detail) {
-    page = <TrackDetail track={detail} cat={cat} onClose={closeDetail} onTrace={onTrace} />;
+    page = <TrackDetail track={detail} cat={cat} onClose={closeDetail} onTrace={onTrace} onOpenNight={openNight} onOpenTrack={open} />;
   } else if (view === "search") {
     page = <SongSearch cat={cat} onOpen={open} onTrace={onTrace} />;
   } else if (view === "timeline") {
