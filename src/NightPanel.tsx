@@ -4,6 +4,7 @@
  *  night to night -- arrow keys work too -- and read each set in place:
  *  contributor by contributor, phases in order, in the order it was played.
  */
+import { ownerlessLabel } from "./nightstats.ts";
 import { useMemo } from "react";
 import type { Catalog, Track } from "./catalog.ts";
 import { fmtDateLong, fmtHours, fmtDur, plural } from "./format.ts";
@@ -41,7 +42,7 @@ export default function NightPanel({ cat, eventId, onClose, onOpenTrack, onOpenN
       }
       const ordered = [...groups.entries()].sort((a, b) =>
         (a[0] ? phase.get(a[0])!.position : 1e9) - (b[0] ? phase.get(b[0])!.position : 1e9));
-      return { pid, name: person?.name ?? "Unattributed", you: !!person?.isYou, count: list.length, groups: ordered, phase };
+      return { pid, name: person?.name ?? ownerlessLabel(list), you: !!person?.isYou, count: list.length, groups: ordered, phase };
     }).sort((a, b) => b.count - a.count);
     return { sets, anonCopies: tracks.length - named.length };
   }, [cat, eventId]);

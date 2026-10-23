@@ -17,6 +17,8 @@ export interface PhaseStat {
 }
 
 export interface PersonStat {
+  /** Only for tracks with no owner: what to call them. */
+  label: string;
   personId: string | null;
   songs: number;
   /** Phases that have at least one played track. */
@@ -31,6 +33,15 @@ export interface NightStats {
   songs: number;
   seconds: number;
   phases: number;
+}
+
+/** What to call tracks nobody owns: a shared pile ("Shared"), albums played as a
+ *  unit ("Albums"), or files lying loose at the top of the night. "Unattributed"
+ *  made them sound like a failure when they are usually just communal. */
+export function ownerlessLabel(list: Track[]): string {
+  const dirs = new Set(list.map((t) => ((t.path?.length ?? 0) > 2 ? t.path[1] : "")));
+  if (dirs.size === 1) return [...dirs][0] || "Loose files";
+  return "Shared & loose";
 }
 
 export function nightStats(tracks: Track[], phases: Phase[]): NightStats {
@@ -59,7 +70,7 @@ export function nightStats(tracks: Track[], phases: Phase[]): NightStats {
       }))
       .sort((a, b) => (a.phase ? a.phase.position : 1e9) - (b.phase ? b.phase.position : 1e9));
     return {
-      personId: pid || null, songs: list.length, seconds, byPhase,
+      personId: pid || null, label: pid ? "" : ownerlessLabel(list), songs: list.length, seconds, byPhase,
       phases: byPhase.filter((p) => p.phase).length,
     };
   }).sort((a, b) => b.songs - a.songs);

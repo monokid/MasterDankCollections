@@ -231,3 +231,7 @@
   .nh-date { font-size: 20pt !important; }
   .chip { border-color: #999 !important; }
 }
+
+/* a list with no names anywhere: say why, so it does not read as a bug */
+.shell .anon-note { margin: 4px 0 10px; padding: 8px 12px; border-radius: 10px; font-size: 12.5px; line-height: 1.45;
+  color: var(--ink-dim); background: rgba(150, 120, 255, 0.07); border: 1px dashed rgba(185, 140, 255, 0.28); }

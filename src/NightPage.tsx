@@ -52,7 +52,7 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
       byPerson.get(k)!.push(t);
     }
     const empty = (pid: string): PersonStat =>
-      ({ personId: pid || null, songs: 0, phases: 0, seconds: 0, byPhase: [] });
+      ({ personId: pid || null, label: "", songs: 0, phases: 0, seconds: 0, byPhase: [] });
     const order = [...byPerson.keys()].map((pid) =>
       stats.persons.find((p) => (p.personId ?? "") === pid) ?? empty(pid));
     order.sort((a, b) => b.songs - a.songs);
@@ -190,7 +190,7 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
               {sets.map((s) => (
                 <button key={s.pid || "none"} className="pchip jump" style={{ ["--pc" as string]: s.colour }}
                   aria-current={active === (s.pid || "none")} onClick={() => jump(s.pid || "none")}>
-                  {s.person?.name ?? "Unattributed"}<i>{s.stat.songs}</i>
+                  {s.person?.name ?? (s.stat.label || "Shared")}<i>{s.stat.songs}</i>
                 </button>
               ))}
             </div>
@@ -234,7 +234,7 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
 
         {sets.map(({ pid, stat, colour, person, others, split }) => {
           const loose = split.loose;
-          const named = person?.name ?? "Unattributed";
+          const named = person?.name ?? (stat.label || "Shared");
           const key = pid || "none";
           const isFolded = folded.has(key);
           return (
@@ -261,6 +261,12 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
               </div>
 
               <div className="pbody" id={`set-${key}`}>
+              {person && split.ordered.length > 0 && split.ordered.every((t) => t.flags.includes("anon")) && (
+                <p className="anon-note">
+                  Only anonymised files survive for this list, so there are no song names. A playlist
+                  export for this night would fill them in.
+                </p>
+              )}
               {stat.byPhase.length > 1 && (
                 <div className="pdiv" role="img"
                   aria-label={`How the phases divide this set's time: ${stat.byPhase

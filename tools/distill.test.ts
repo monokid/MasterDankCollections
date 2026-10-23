@@ -1169,6 +1169,71 @@ test("exportify rows survive quotes, commas and a repeated export", () => {
   assert.ok(!JSON.stringify(r.playlists).includes("u1"), "handles never reach the output");
 });
 
+// ------------------------------------------------------------ night audit fixes
+
+const AUDIT_RULES: Rules = {
+  ...RULES,
+  segmentRoles: { ada_: "person", _lsd: "wrapper", unnamed: "wrapper" },
+  personAliases: { ada: "Ada", ada_: "Ada" },
+};
+const audit = (files: ReturnType<typeof file>[], spotify: ReturnType<typeof spotifyOf> | null = null) =>
+  distillOne([{ id: "test", crawl: crawlOf(files) }], AUDIT_RULES, spotify);
+const tagged = (p: string[], dur: number, i: number) =>
+  fileD(p, dur, { artist: BANDS[i % 9], title: `Song ${i}`, composer: "Ada" });
+
+test("a list filed twice, flat and again in phases, is counted once", () => {
+  // 2024-05-04: one contributor's list sat in `Ian` and in `Ian_/1. Intro`, and a
+  // night that should have run 1 h 40 for him showed 3 h 18.
+  const lens = [200, 310, 421, 187, 256, 302];
+  const files = [
+    ...lens.map((d, i) => tagged(["20240504 Roll", "Ada", `0${i} Song ${i}.mp3`], d, i)),
+    ...lens.map((d, i) => tagged(["20240504 Roll", "Ada_", i < 3 ? "1. Intro" : "2. Peak", `Song ${i}.mp3`], d, i)),
+  ];
+  const c = audit(files);
+  assert.equal(c.events[0].playedCount, 6, "six songs were played, not twelve");
+  assert.equal(c.tracks.filter((t) => t.flags.includes("copy")).length, 6);
+  assert.ok(c.tracks.filter((t) => t.played).every((t) => t.phaseId), "the phased filing is the one kept");
+});
+
+test("a song repeated inside one list is not mistaken for a second filing", () => {
+  const files = [200, 310, 421, 187].map((d, i) =>
+    tagged(["20240504 Roll", "Ada", i < 2 ? "A" : "B", `Song ${i % 2}.mp3`], d, i % 2));
+  const c = audit(files);
+  assert.equal(c.tracks.filter((t) => t.flags.includes("copy")).length, 0, "one folder, so a repeat is a repeat");
+});
+
+test("a stripped list in a shared wrapper belongs to the name on its files", () => {
+  // `_LSD/Ada lsd 01.mp3`: no owner folder, but the owner's name is on every file.
+  const named = [200, 310, 421, 187, 256, 302].map((d, i) => tagged(["20241109 Roll", "Ada", `Song ${i}.mp3`], d, i));
+  const stripped = [233, 341, 275, 198, 402, 288].map((d, i) =>
+    fileD(["20241109 Roll", "_LSD", `Ada lsd 0${i + 1}.mp3`], d));
+  const c = audit([...named, ...stripped]);
+  const lsd = c.tracks.filter((t) => t.path.includes("_LSD"));
+  assert.ok(lsd.length > 0 && lsd.every((t) => t.personId === "ada"), "owned by Ada, not 'unattributed'");
+  assert.equal(c.events[0].playedCount, 12, "and still played: it is a list of its own");
+});
+
+test("the same anonymised file filed twice counts once, but two songs a moment apart both count", () => {
+  // Genuine copies agree to the hundredth of a second; different songs of one list
+  // land within a second of each other about twice per list.
+  const a = [200.0, 310.0, 421.0, 187.0].map((d, i) => fileD(["20240504 Roll", "Ada", "Unnamed", `Ada 0${i + 1}.mp3`], d));
+  const copy = [200.0, 310.0].map((d, i) => fileD(["20240504 Roll", "Ada", "Peak", `Ada 0${i + 1} - peak.mp3`], d));
+  const near = [fileD(["20240504 Roll", "Ada", "Unnamed", "Ada 05.mp3"], 421.4)];   // a different song, 0.4 s off
+  const c = audit([...a, ...copy, ...near]);
+  assert.equal(c.events[0].playedCount, 5, "four songs, one re-filed twice, plus the near-miss");
+});
+
+test("a Spotify list's leftovers take the leftover files by nearest length", () => {
+  // Older files run 20 s over Spotify's cut: nothing pairs by length, but the
+  // counts agree, so the names belong to the files. No anonymous row is left.
+  const files = [200, 310, 421, 187].map((d, i) => fileD(["20230722 Roll", "Ada", `Ada 0${i + 1}.mp3`], d + 20));
+  const data = spotifyOf("2023-07-22", [["Ada", [
+    sp("One", ["Heilung"], 200), sp("Two", ["Muse"], 310), sp("Three", ["Rush"], 421), sp("Four", ["Tool"], 187)]]]);
+  const c = audit(files, data);
+  assert.equal(c.events[0].playedCount, 4);
+  assert.equal(c.tracks.filter((t) => t.played && t.flags.includes("anon")).length, 0, "no anonymous rows shown");
+});
+
 // ----------------------------------------------------------------------- report
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

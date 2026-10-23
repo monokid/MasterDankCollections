@@ -781,6 +781,74 @@ function pairLoosely(named: Track[], anon: Track[], tol = 8): Array<[Track, Trac
   return out;
 }
 
+/** Pair what is left by nearest length, over a wide gap, one to one. For a
+ *  Spotify list whose files are the same songs in an older, longer cut: the
+ *  counts agree even when the lengths do not, and the alternative is a night
+ *  that shows an anonymous file beside a song it already has the name of. */
+function pairNearest(named: Track[], anon: Track[], tol = 45): Array<[Track, Track]> {
+  const cand: Array<[number, Track, Track]> = [];
+  for (const n of named) for (const a of anon) {
+    if (n.durationSec === null || a.durationSec === null) continue;
+    const d = Math.abs(n.durationSec - a.durationSec);
+    if (d <= tol) cand.push([d, n, a]);
+  }
+  cand.sort((x, y) => x[0] - y[0]);
+  const usedN = new Set<Track>(), usedA = new Set<Track>();
+  const out: Array<[Track, Track]> = [];
+  for (const [, n, a] of cand) {
+    if (usedN.has(n) || usedA.has(a)) continue;
+    usedN.add(n); usedA.add(a); out.push([n, a]);
+  }
+  return out;
+}
+
+/** A list filed twice -- once flat, once split into phases -- is one list. Both
+ *  copies were counted, which put one contributor's night at 3 h against
+ *  everyone else's 1 h 20. The first folder under the night is the list; where
+ *  two lists share at least half of the smaller one's songs, the less-phased one
+ *  is the second filing and its overlapping songs are copies. */
+function findNamedCopies(named: Track[]): Set<Track> {
+  const key = (t: Track) => `${fold(t.artist ?? "")}|${fold(splitVariant(t.title ?? "").base)}`;
+  const lists = new Map<string, Track[]>();
+  for (const t of named) {
+    if (t.source === "spotify" || !t.title) continue;
+    const k = t.path[1] ?? "";
+    if (!lists.has(k)) lists.set(k, []);
+    lists.get(k)!.push(t);
+  }
+  const copies = new Set<Track>();
+  if (lists.size < 2) return copies;
+  const order = [...lists.entries()].sort((a, b) =>
+    b[1].filter((t) => t.phaseId).length - a[1].filter((t) => t.phaseId).length
+    || b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  const kept = new Set<string>();
+  for (const [, ts] of order) {
+    const overlap = ts.filter((t) => kept.has(key(t)));
+    if (overlap.length >= Math.max(2, ts.length / 2)) for (const t of overlap) copies.add(t);
+    for (const t of ts) kept.add(key(t));
+  }
+  return copies;
+}
+
+/** The same anonymised file filed in two folders is one track. Running times
+ *  equal to the hundredth of a second are the same file: measured on the real
+ *  library every genuine copy agrees to 0.00 s, while two different songs of one
+ *  list land within a second of each other about twice per list ("Sammy 07" and
+ *  "Sammy 18" differ by 0.47 s), so a looser test deletes real music. Paired
+ *  files come first, so a re-filed copy is judged against the one that found its
+ *  named twin. */
+const SAME_FILE = 0.05;
+function findAnonCopies(anon: Track[]): Set<Track> {
+  const copies = new Set<Track>();
+  const kept: Track[] = anon.filter((t) => t.twinId);
+  const rest = anon.filter((t) => !t.twinId).sort((a, b) => a.path.join("/").localeCompare(b.path.join("/")));
+  for (const t of rest) {
+    if (t.durationSec !== null && kept.some((k) => k.durationSec !== null && Math.abs(k.durationSec - t.durationSec!) <= SAME_FILE)) copies.add(t);
+    else kept.push(t);
+  }
+  return copies;
+}
+
 /** The number a filename carries: "00A -" is 0.1, "07." is 7, "Ada 12" is 12. */
 function nameNumber(name: string): number | null {
   const stem = stemOf(name);
@@ -961,6 +1029,14 @@ function distill(
     // outranks a composer tag -- which can be a leftover from a night where
     // someone else played the same file.
     if (f.placedPerson) { personName = canonPerson(f.placedPerson); personSource = "rule"; }
+
+    // A stripped list in a shared wrapper ("_LSD/Ada lsd 01.mp3") has no owner
+    // folder, but the owner's name is written on every file: that is the only
+    // place it is recorded.
+    if (!personName && isAnon) {
+      const m = stemOf(filename).match(/^(\p{L}+)[\s_-]/u);
+      if (m && knownNames.has(norm(m[1]))) { personName = canonPerson(m[1]); personSource = "filename"; }
+    }
 
     let personId: string | null = null;
     if (personName && !WRAPPER_WORDS.has(norm(personName))) {
@@ -1222,25 +1298,22 @@ function distill(
   // Anonymised tracks that still count toward a night: only where the named
   // list is evidently missing or incomplete, so the anon one is all there is.
   const countOrphanAnon = new Set<string>();
-  for (const [k, { named, anon }] of twinLists) {
+  const countAnonDirs = new Set<string>();     // anon-only folders: `${person-night}|${folder}`
+  const dirOf = (t: Track) => t.path.slice(0, -1).join("/");
+  const trackById = new Map(tracks.map((t) => [t.id, t]));
+  for (const [k, group] of twinLists) {
     const [eventId, personId] = k.split("|");
+    const anon = group.anon;
+    // 0. a list filed twice is one list
+    const namedCopies = findNamedCopies(group.named);
+    for (const t of namedCopies) t.flags.push("copy");
+    const named = group.named.filter((t) => !namedCopies.has(t));
+
     const an = listNumbers(anon), nn = listNumbers(named);
     for (const t of anon) t.playOrder = an.get(t) ?? null;
     for (const t of named) t.playOrder = nn.get(t) ?? null;
-    // A Spotify list says what a night held, not how much of it survives as
-    // files, so only files can show that the named list is incomplete.
-    if (named.filter((t) => t.source !== "spotify").length < anon.length / 2) countOrphanAnon.add(k);
-    if (!named.length || !anon.length) continue;
 
-    const pairs = pairByDuration(named, anon);
-    // The files of an old night can run a few seconds off Spotify's cut of the
-    // same song. Among what is left, take a pair only where it is the single
-    // close candidate both ways.
-    const paired = new Set<Track>(pairs.flat());
-    pairs.push(...pairLoosely(
-      named.filter((t) => t.source === "spotify" && !paired.has(t)),
-      anon.filter((t) => !paired.has(t))));
-    for (const [n, a] of pairs) {
+    const link = (n: Track, a: Track) => {
       n.twinId = a.id; a.twinId = n.id;
       // 1. the set order: the anonymised list is what was played, so its
       //    numbering orders the named twin, whose own names often do not.
@@ -1255,6 +1328,47 @@ function distill(
         }
         if (ph) { n.phaseId = ph.id; n.provenance.phase = "twin"; ph.trackCount++; }
       }
+    };
+    if (named.length && anon.length) {
+      for (const [n, a] of pairByDuration(named, anon)) link(n, a);
+    }
+    // The same anonymised file filed twice counts once.
+    const anonCopies = findAnonCopies(anon);
+    for (const t of anonCopies) t.flags.push("copy");
+    const anonU = anon.filter((t) => !anonCopies.has(t));
+    if (named.length && anonU.length) {
+      // The files of an old night can run seconds off Spotify's cut of the same
+      // song: take a pair where it is the single close candidate both ways, then
+      // whatever is left by nearest length. A Spotify list is the identity of the
+      // played files, so its leftovers belong to the leftover files.
+      const spot = () => named.filter((t) => t.source === "spotify" && !t.twinId);
+      const free = () => anonU.filter((t) => !t.twinId);
+      for (const [n, a] of pairLoosely(spot(), free())) link(n, a);
+      for (const [n, a] of pairNearest(spot(), free())) { link(n, a); n.provenance.twin = "derived"; }
+    }
+    // A Spotify list says what a night held, not how much of it survives as
+    // files, so only files can show that the named list is incomplete.
+    if (named.filter((t) => t.source !== "spotify").length < anonU.length / 2) countOrphanAnon.add(k);
+    // A folder of anonymised files no named track claims is a list of its own
+    // (a second set filed apart), and it was played.
+    const dirs = new Map<string, Track[]>();
+    for (const t of anonU) {
+      const d = dirOf(t);
+      if (!dirs.has(d)) dirs.set(d, []);
+      dirs.get(d)!.push(t);
+    }
+    for (const [d, ts] of dirs) {
+      const paired = ts.filter((t) => t.twinId);
+      if (paired.length >= ts.length / 2) continue;
+      // Most of this folder is unclaimed: the one or two files that found a
+      // "twin" did so by chance -- two songs of different lists land within two
+      // seconds of each other about once per list -- so undo those pairs.
+      for (const t of paired) {
+        const n = trackById.get(t.twinId!);
+        if (n) n.twinId = null;
+        t.twinId = null;
+      }
+      countAnonDirs.add(`${k}|${d}`);
     }
   }
 
@@ -1262,12 +1376,15 @@ function distill(
   for (const e of events.values()) { e.durationSec = 0; e.playedCount = 0; }
   for (const t of tracks) {
     t.played = false;
+    if (t.flags.includes("copy")) continue;                    // the second filing of a track
     if (t.flags.includes("anon")) {
       if (t.twinId) continue;                                  // its named twin counts
       // An unattributed anonymised track has no named list it could be a copy
       // of, so it was simply played; one with an owner counts only if that
-      // owner's named list is missing or incomplete.
-      if (t.personId && !countOrphanAnon.has(`${t.eventId}|${t.personId}`)) continue;
+      // owner's named list is missing or incomplete, or it sits in a folder of
+      // its own that no named track claims.
+      const pk = `${t.eventId}|${t.personId}`;
+      if (t.personId && !countOrphanAnon.has(pk) && !countAnonDirs.has(`${pk}|${dirOf(t)}`)) continue;
     }
     // Where the contributor's anonymised list survives it is the record of what
     // was played, so a Spotify entry that matched none of its files is almost

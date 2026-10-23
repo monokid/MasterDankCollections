@@ -1,6 +1,6 @@
 /** Per-person and per-phase numbers for a night's page. */
 import assert from "node:assert/strict";
-import { nightStats } from "../src/nightstats.ts";
+import { nightStats, ownerlessLabel } from "../src/nightstats.ts";
 import type { Phase, Track } from "../src/catalog.ts";
 
 let passed = 0;
@@ -70,6 +70,13 @@ test("tracks without a running time still get a share", () => {
   const tracks = [tr("a", "ada", "p1", 0, { durationSec: null }), tr("b", "ada", "p2", 0, { durationSec: null })];
   const s = nightStats(tracks, [ph("p1", 0), ph("p2", 1)]);
   assert.equal(s.persons[0].byPhase[0].share, 0.5);
+});
+
+test("tracks nobody owns are named for where they sit, not called unattributed", () => {
+  const at = (path: string[]) => tr("x", null as never, "", 0, { path }) as never;
+  assert.equal(ownerlessLabel([at(["20150925 Trip", "Albums", "Wish You Were Here", "a.mp3"])]), "Albums");
+  assert.equal(ownerlessLabel([at(["20201104 Trip", "000 - loose.mp3"])]), "Loose files");
+  assert.equal(ownerlessLabel([at(["20151002 Trip", "Shared", "a.mp3"]), at(["20151002 Trip", "b.mp3"])]), "Shared & loose");
 });
 
 console.log(`nightstats: ${passed} passed, ${failures.length} failed`);

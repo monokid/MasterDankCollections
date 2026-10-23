@@ -145,7 +145,8 @@ export type TrackFlag =
   | "album"         // part of a full album played as a unit
   | "video"         // not an audio file
   | "untagged"      // no usable metadata
-  | "duplicate";    // same artist+title already present in this event
+  | "duplicate"     // same artist+title already present in this event
+  | "copy";         // the same track filed a second time in one contributor's list
 
 /** What the file itself is. Absent for a track that exists only in a Spotify
  *  playlist -- there is no file to describe. */
