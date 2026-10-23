@@ -7,7 +7,10 @@
 import { useMemo, useRef, useState } from "react";
 import type { Catalog } from "./catalog.ts";
 import type { Trace } from "./Timeline.tsx";
-import DrillPanel, { type Drill } from "./Drill.tsx";
+import DrillPanel, { drillName, type Drill } from "./Drill.tsx";
+import { plural } from "./format.ts";
+import { copyText } from "./pagehelpers.ts";
+import "./pages.css";
 import type { Range } from "./analytics.ts";
 import {
   buildPlanIndex, checkList, newOnes, parseExportify, parseList, summarise,
@@ -18,8 +21,6 @@ const VERDICTS: Verdict[] = ["never", "played", "variant", "clash"];
 const WORDS: Record<Verdict, string> = {
   never: "new", played: "played", variant: "other version", clash: "repeat",
 };
-
-const plural = (n: number, one: string, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 
 function detail(r: PlanRow): string {
   const bits: string[] = [];
@@ -70,8 +71,7 @@ export default function Planner({ cat, range, onRange, onTrace, onOpenNight }: {
   };
 
   const copyNew = async () => {
-    await navigator.clipboard.writeText(newOnes(rows));
-    setCopied(counts.never);
+    if (await copyText(newOnes(rows))) setCopied(counts.never);
   };
 
   const target = (r: PlanRow): Drill | null =>
@@ -165,6 +165,7 @@ export default function Planner({ cat, range, onRange, onTrace, onOpenNight }: {
 
       {drill && (
         <DrillPanel cat={cat} drill={drill} range={range} canBack={stack.length > 1}
+          backLabel={stack.length > 1 ? drillName(cat, stack[stack.length - 2]) : undefined}
           onBack={() => setStack((s) => s.slice(0, -1))} onClose={() => setStack([])} onDrill={open}
           onTrace={onTrace} onRange={(r) => { onRange(r); setStack([]); }}
           onOpenNight={onOpenNight} />

@@ -1,178 +1,68 @@
-import { useEffect, useState, useCallback } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Catalog, Track } from "./catalog.ts";
-import SongSearch from "./SongSearch.tsx";
 import Starfield from "./Starfield.tsx";
 import Logo from "./Logo.tsx";
 import Home, { Wash, prefersReducedMotion } from "./Home.tsx";
-import Resolver from "./Resolver.tsx";
 import TabRail from "./TabRail.tsx";
-import "./header.css";
-import Timeline, { type Trace } from "./Timeline.tsx";
-import Insights from "./Insights.tsx";
-import Planner from "./Planner.tsx";
-import NightPanel from "./NightPanel.tsx";
-import EventsList from "./Browse.tsx";
-import NightPage from "./NightPage.tsx";
-import { Flags, TrackRow, fmtDate, fmtDur } from "./rows.tsx";
+import "./core.css";
+import type { Trace } from "./Timeline.tsx";
+import ErrorBoundary from "./ErrorBoundary.tsx";
+import KeyHelp from "./KeyHelp.tsx";
+import Loader from "./Loader.tsx";
+import { lazyPage, whenIdle } from "./lazy.ts";
+import { catalogIndex } from "./catalogIndex.ts";
 import { isShown, visibleCatalog } from "./config.ts";
-import { getBundle, hasSession, resume } from "./vault.ts";
+import { getBundle, hasSession, prefetch, resume, type Bundle } from "./vault.ts";
 import type { WeatherMap } from "./weather.ts";
 import type { Range } from "./analytics.ts";
+import { HOME, formatRoute, parseRoute, titleFor, type Route } from "./route.ts";
+import { createKeyMachine, isTypingTarget } from "./keys.ts";
+import { getSearchQuery, requestSearchFocus, setSearchQuery, subscribeSearchQuery } from "./events.ts";
+
+// Home is the only thing in the first download. Every page is its own chunk,
+// fetched on demand and warmed up while the browser is idle.
+const SongSearch = lazyPage(() => import("./SongSearch.tsx"));
+const TimelinePage = lazyPage(() => import("./TimelinePage.tsx"));
+const BrowseView = lazyPage(() => import("./BrowseView.tsx"));
+const Insights = lazyPage(() => import("./Insights.tsx"));
+const Planner = lazyPage(() => import("./Planner.tsx"));
+const Resolver = lazyPage(() => import("./Resolver.tsx"));
+const TrackDetail = lazyPage(() => import("./TrackDetail.tsx"));
 
 type View = "home" | "search" | "timeline" | "browse" | "insights" | "plan" | "resolve";
+type MenuView = "search" | "timeline" | "browse" | "insights";
 
-// ------------------------------------------------------------------ browse
+const MENU: readonly MenuView[] = ["search", "timeline", "browse", "insights"];
+const LAST_VIEW = "mdc.view";
 
-function BrowseView({ cat, weather, onOpen, eventId, setEventId }: {
-  cat: Catalog; weather: WeatherMap; onOpen: (t: Track) => void;
-  eventId: string | null; setEventId: (id: string | null) => void;
-}) {
-  // The night we just left, so the list can scroll back to its card.
-  const [from, setFrom] = useState<string | null>(null);
-  const ev = eventId ? cat.events.find((e) => e.id === eventId && isShown(e)) : null;
+/** The view this tab session last used (not a secret: just a tab name). */
+function lastView(): MenuView {
+  try {
+    const v = sessionStorage.getItem(LAST_VIEW);
+    if (v && (MENU as readonly string[]).includes(v)) return v as MenuView;
+  } catch { /* storage blocked */ }
+  return "search";
+}
 
-  if (!ev) {
-    return <EventsList cat={cat} weather={weather} focusId={from} onOpenNight={setEventId} />;
+function routeOf(view: View, detail: Track | null, eventId: string | null): Route {
+  if (detail) return { name: "song", id: detail.id };
+  switch (view) {
+    case "home": return HOME;
+    case "search": return { name: "search", q: getSearchQuery() };
+    case "browse": return eventId ? { name: "night", id: eventId } : { name: "browse" };
+    default: return { name: view };
   }
-  return (
-    <NightPage cat={cat} ev={ev} weather={weather} onOpen={onOpen}
-      onBack={() => { setFrom(ev.id); setEventId(null); }}
-      onGoto={setEventId} />
-  );
 }
 
+/** Does the address bar already say this? Compared as routes, so %20 vs + does not matter. */
+const urlIs = (r: Route) => formatRoute(parseRoute(window.location.hash)) === formatRoute(r);
 
-// ------------------------------------------------------------------- detail
-
-/** Every night a traced song/artist/person appears on, as a list under the
- *  timeline, so the lit bars can actually be read. */
-function TraceList({ cat, trace, onOpen }: {
-  cat: Catalog; trace: Trace; onOpen: (t: Track) => void;
-}) {
-  const nights = cat.events
-    .filter((e) => trace.nights.has(e.id) && e.date)
-    .sort((a, b) => b.date!.localeCompare(a.date!));
-  return (
-    <>
-      <h2 style={{ marginTop: 26 }}>
-        {trace.label} · {nights.length} night{nights.length === 1 ? "" : "s"}
-      </h2>
-      {nights.map((e) => {
-        const hits = cat.tracks.filter((t) =>
-          t.eventId === e.id && (
-            trace.kind === "song" ? t.songId === trace.id
-              : trace.kind === "artist" ? t.artist && t.artist.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === trace.id
-              : t.personId === trace.id));
-        return (
-          <div key={e.id}>
-            <div className="phasehead" style={{ marginTop: 14 }}>
-              <span className="name">{fmtDate(e.date)}</span>
-              <span className="meta">
-                {e.title ? `${e.title} · ` : ""}{hits.length} track{hits.length === 1 ? "" : "s"}
-              </span>
-            </div>
-            <div className="rows">
-              {hits.slice(0, 12).map((t) => (
-                <TrackRow key={t.id} track={t} cat={cat} query="" onOpen={onOpen} />
-              ))}
-            </div>
-          </div>
-        );
-      })}
-    </>
-  );
-}
-
-function TrackDetail({ track, cat, onClose, onTrace }: {
-  track: Track; cat: Catalog; onClose: () => void; onTrace: (t: Trace) => void;
-}) {
-  const person = cat.people.find((p) => p.id === track.personId);
-  const ev = cat.events.find((e) => e.id === track.eventId);
-  const phase = cat.phases.find((p) => p.id === track.phaseId);
-  const song = track.songId ? cat.songs.find((s) => s.id === track.songId) : undefined;
-  const artist = song ? cat.artists.find((a) => a.id === song.id.split("|")[0]) : undefined;
-  const twin = track.twinId ? cat.tracks.find((t) => t.id === track.twinId) : undefined;
-  const P = ({ f }: { f: string }) =>
-    <span className="prov">via {track.provenance[f] ?? "unknown"}</span>;
-  return (
-    <div className="page">
-      <button className="backlink" onClick={onClose}>← back</button>
-      <div className="panel detail">
-        <h1>{track.title ?? "(untitled)"}</h1>
-        <p className="sub">{track.artist ?? "unknown artist"} <Flags track={track} /></p>
-        <dl>
-          <dt>Artist</dt><dd>{track.artist ?? "—"}<P f="artist" /></dd>
-          <dt>Title</dt><dd>{track.title ?? "—"}<P f="title" /></dd>
-          {track.album && <><dt>Album</dt><dd>{track.album}</dd></>}
-          <dt>Brought by</dt><dd>{person?.name ?? "unknown"}<P f="person" /></dd>
-          {twin && (
-            <>
-              <dt>{track.flags.includes("anon") ? "Named as" : "Anonymised as"}</dt>
-              <dd>
-                {twin.flags.includes("anon")
-                  ? <code>{twin.path[twin.path.length - 1]}</code>
-                  : `${twin.artist ? twin.artist + " — " : ""}${twin.title}`}
-                <span className="prov">paired by running time</span>
-              </dd>
-            </>
-          )}
-          {track.playOrder !== null && (
-            <><dt>Set order</dt><dd>number {track.playOrder} in this contributor's set</dd></>
-          )}
-          <dt>Event</dt><dd>{fmtDate(ev?.date ?? null)} · {ev?.folder}<P f="event" /></dd>
-          {phase && <><dt>Phase</dt><dd>{phase.clean} ({phase.bucket})
-            {phase.minutes ? ` · ${phase.minutes} min` : ""}<P f="phase" /></dd></>}
-          {song && song.nights.length > 1 && (
-            <>
-              <dt>History</dt>
-              <dd>
-                played on <b>{song.nights.length} nights</b>, {song.firstPlayed} to{" "}
-                {song.lastPlayed}
-                {song.variants.length > 0 && <> · as {song.variants.join(", ")}</>}
-                <button className="backlink" style={{ marginLeft: 10, marginBottom: 0 }}
-                  onClick={() => onTrace({
-                    kind: "song", id: song.id,
-                    label: `${song.artist} — ${song.title}`,
-                    nights: new Set(song.nights),
-                  })}>show on timeline →</button>
-              </dd>
-            </>
-          )}
-          {artist && artist.nights.length > 1 && (
-            <>
-              <dt>This artist</dt>
-              <dd>
-                {artist.songs} song{artist.songs === 1 ? "" : "s"} across{" "}
-                <b>{artist.nights.length} nights</b>
-                <button className="backlink" style={{ marginLeft: 10, marginBottom: 0 }}
-                  onClick={() => onTrace({
-                    kind: "artist", id: artist.id, label: artist.name,
-                    nights: new Set(artist.nights),
-                  })}>show on timeline →</button>
-              </dd>
-            </>
-          )}
-          <dt>Length</dt><dd>{fmtDur(track.durationSec) || "—"}</dd>
-          {track.source === "spotify"
-            ? <><dt>From</dt><dd>a Spotify playlist export — no file in the library</dd></>
-            : <>
-                <dt>File</dt><dd>{track.ext} · {(track.sizeBytes / 1e6).toFixed(1)} MB</dd>
-                <dt>Path</dt><dd><code>{track.path.join(" / ")}</code></dd>
-              </>}
-          {track.spotifyUri && (
-            <>
-              <dt>Spotify</dt>
-              <dd><a href={`https://open.spotify.com/track/${track.spotifyUri.split(":").pop()}`}
-                target="_blank" rel="noreferrer">open in Spotify ↗</a></dd>
-            </>
-          )}
-        </dl>
-      </div>
-    </div>
-  );
-}
-
-// --------------------------------------------------------------------- app
+// Each history entry we create carries a counter, so we know whether Back would
+// stay inside the app, and which scroll position belongs to which entry.
+const histKey = (): number => {
+  const k = (window.history.state as { k?: unknown } | null)?.k;
+  return typeof k === "number" ? k : 0;
+};
 
 export default function App() {
   const [cat, setCat] = useState<Catalog | null>(null);
@@ -189,112 +79,359 @@ export default function App() {
   const [selectedNight, setSelectedNight] = useState<string | null>(null);
   const [eventId, setEventId] = useState<string | null>(null);
   const [weather, setWeather] = useState<WeatherMap>({});
+  const [help, setHelp] = useState(false);
+
+  // Latest values for listeners that are registered once.
+  const catRef = useRef<Catalog | null>(null);
+  const live = useRef({ view, detail, wash });
+  live.current = { view, detail, wash };
+  const scrollRef = useRef<HTMLElement>(null);
+
+  // A deep link opened while locked: remembered, and followed once the vault opens.
+  const pending = useRef<Route | null>(null);
+  const read = useRef(false);
+  if (!read.current) {
+    read.current = true;
+    const r = parseRoute(window.location.hash);
+    if (r.name !== "home") pending.current = r;
+  }
+
+  // ------------------------------------------------------------ unlock
+
+  // The decrypted bundle becomes a visible catalogue once per bundle, however
+  // often Home hands us back (clicking the logo and entering again).
+  const loaded = useRef<{ bundle: Bundle; cat: Catalog } | null>(null);
+  const load = useCallback((): Catalog | null => {
+    const b = getBundle();
+    if (!b) return null;
+    if (loaded.current?.bundle !== b) {
+      loaded.current = { bundle: b, cat: visibleCatalog(b.catalog) };
+      setWeather(b.weather as WeatherMap);
+    }
+    return loaded.current.cat;
+  }, []);
+
+  const adopt = useCallback((c: Catalog) => { catRef.current = c; setCat(c); }, []);
+
+  /** Make the app show `r`, adjusting it to what exists (an unknown night is just Browse). */
+  const applyRoute = useCallback((r: Route, c: Catalog) => {
+    const ix = catalogIndex(c);
+    let applied: Route = r;
+    setEmerge(false);
+    switch (r.name) {
+      case "home":
+        setView("home"); setDetail(null); break;
+      case "search":
+        setSearchQuery(r.q); setView("search"); setDetail(null); break;
+      case "night": {
+        const e = ix.event.get(r.id);
+        if (e && isShown(e)) setEventId(r.id);
+        else { applied = { name: "browse" }; setEventId(null); }
+        setView("browse"); setDetail(null);
+        break;
+      }
+      case "browse":
+        setEventId(null); setView("browse"); setDetail(null); break;
+      case "song": {
+        const t = ix.track.get(r.id);
+        if (t) { setDetail(t); setView((v) => (v === "home" ? "search" : v)); }
+        else { applied = { name: "search", q: getSearchQuery() }; setView("search"); setDetail(null); }
+        break;
+      }
+      default:
+        setView(r.name); setDetail(null);
+    }
+    // The address bar must never claim a page we did not show.
+    if (formatRoute(applied) !== formatRoute(r)) {
+      window.history.replaceState({ k: histKey() }, "", formatRoute(applied));
+    }
+  }, []);
 
   // Nothing is fetched in the clear: the catalogue arrives only through the
   // vault, after Home has unlocked it. A reload in the same tab session still
-  // holds the key, so open the vault quietly and the next Enter will not prompt.
+  // holds the key, so open the vault quietly -- and if the address is a deep
+  // link, go straight to it rather than make the visitor click through again.
   useEffect(() => {
-    if (hasSession()) resume().catch(() => {});
-  }, []);
+    let alive = true;
+    if (!hasSession()) { prefetch(); return; }
+    resume().then((ok) => {
+      if (!alive || !ok || catRef.current) return;
+      const p = pending.current;
+      if (!p) return;                                   // Home's own click-through takes it from here
+      const c = load();
+      if (!c) return;
+      pending.current = null;
+      adopt(c);
+      applyRoute(p, c);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [load, adopt, applyRoute]);
 
   const enter = useCallback((x: number, y: number) => {
-    const b = getBundle();
-    if (!b) return;                       // Home only calls this after a successful unlock
-    setCat(visibleCatalog(b.catalog));
-    setWeather(b.weather as WeatherMap);
+    const c = load();
+    if (!c) return;                       // Home only calls this after a successful unlock
+    adopt(c);
     setWash((w) => w ?? { x, y });
+  }, [load, adopt]);
+
+  // Warm the pages up so entering feels instant: search first (it is where
+  // everyone lands), then the rest once the catalogue is open.
+  useEffect(() => whenIdle(() => { SongSearch.preload(); TrackDetail.preload(); }), []);
+  useEffect(() => {
+    if (!cat) return;
+    return whenIdle(() => {
+      for (const p of [SongSearch, TimelinePage, BrowseView, Insights, TrackDetail]) p.preload();
+      void import("./NightPage.tsx");
+    }, 4000);
+  }, [cat]);
+
+  // ------------------------------------------------------- history & scroll
+
+  const keyNow = useRef(0);       // the history entry we are on
+  const keyTop = useRef(0);       // the newest entry we have made
+  const keyStart = useRef(0);     // the entry the page loaded on: Back from here leaves the app
+  const scrolls = useRef(new Map<number, number>());
+  const leavingTop = useRef(0);
+  const restoreToken = useRef(0);
+  const navDuringWash = useRef(false);
+
+  useEffect(() => {
+    window.history.scrollRestoration = "manual";     // the scroller is <main>, not the window
+    keyNow.current = keyTop.current = keyStart.current = histKey();
+    if ((window.history.state as { k?: unknown } | null)?.k === undefined) {
+      window.history.replaceState({ k: keyNow.current }, "");
+    }
   }, []);
 
-  const open = useCallback((t: Track) => { setDetail(t); }, []);
-  const close = useCallback(() => setDetail(null), []);
+  const snap = useCallback(() => { leavingTop.current = scrollRef.current?.scrollTop ?? 0; }, []);
+  /** Every in-app navigation goes through here: remember where we were scrolled, then change state. */
+  const nav = useCallback((fn: () => void) => {
+    snap();
+    if (live.current.wash) navDuringWash.current = true;
+    fn();
+  }, [snap]);
 
+  const restoreScroll = useCallback((top: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const token = ++restoreToken.current;
+    let tries = 0;
+    // The page may still be arriving (a lazy chunk, a list laying out): keep
+    // trying for a moment, and give up the instant the visitor scrolls.
+    const step = () => {
+      if (token !== restoreToken.current) return;
+      el.scrollTo({ top, behavior: "instant" });
+      if (Math.abs(el.scrollTop - top) < 2 || ++tries > 45) return;
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }, []);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const stop = () => { restoreToken.current++; };
+    const opts = { passive: true } as const;
+    el.addEventListener("wheel", stop, opts);
+    el.addEventListener("touchstart", stop, opts);
+    el.addEventListener("keydown", stop);
+    return () => {
+      el.removeEventListener("wheel", stop);
+      el.removeEventListener("touchstart", stop);
+      el.removeEventListener("keydown", stop);
+    };
+  }, []);
+
+  // Back / forward (and a hand-edited hash).
+  useEffect(() => {
+    const onPop = () => {
+      scrolls.current.set(keyNow.current, scrollRef.current?.scrollTop ?? 0);
+      keyNow.current = histKey();
+      const r = parseRoute(window.location.hash);
+      const c = catRef.current;
+      if (!c) { pending.current = r.name === "home" ? null : r; return; }   // still locked: remember it
+      if (live.current.wash) navDuringWash.current = true;
+      applyRoute(r, c);
+      restoreScroll(scrolls.current.get(keyNow.current) ?? 0);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [applyRoute, restoreScroll]);
+
+  // State -> URL. The URL mirrors the app, it does not drive it: this only
+  // writes when the address differs, and never while the vault is still shut
+  // (the visitor's deep link must survive until it can be followed).
+  useLayoutEffect(() => {
+    if (!cat || wash) return;
+    const route = routeOf(view, detail, eventId);
+    if (urlIs(route)) return;
+    scrolls.current.set(keyNow.current, leavingTop.current);
+    keyNow.current = ++keyTop.current;
+    window.history.pushState({ k: keyNow.current }, "", formatRoute(route));
+    restoreToken.current++;
+    scrollRef.current?.scrollTo({ top: 0, behavior: "instant" });
+  }, [cat, wash, view, detail, eventId]);
+
+  // The search box reports every keystroke; mirror it quietly (replace, not
+  // push, so Back does not step through letters).
+  useEffect(() => {
+    let timer = 0;
+    const off = subscribeSearchQuery((q) => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        const l = live.current;
+        if (!catRef.current || l.wash || l.view !== "search" || l.detail) return;
+        const r: Route = { name: "search", q };
+        if (!urlIs(r)) window.history.replaceState(window.history.state, "", formatRoute(r));
+      }, 250);
+    });
+    return () => { off(); window.clearTimeout(timer); };
+  }, []);
+
+  /** Close a track: step back if we came here from inside the app, else just close it. */
+  const closeDetail = useCallback(() => {
+    if (keyNow.current > keyStart.current) window.history.back();
+    else nav(() => setDetail(null));
+  }, [nav]);
+
+  // ------------------------------------------------------ title & announce
+
+  const route = useMemo(() => routeOf(view, detail, eventId), [view, detail, eventId]);
+  const unlocked = cat !== null;
+  const night = route.name === "night" ? route.id : null;
+  useEffect(() => {
+    document.title = titleFor(unlocked ? route : HOME, night);   // a date is already in the URL; never a song name
+  }, [unlocked, route, night]);
+  const announce = unlocked && route.name !== "home" ? titleFor(route, night).split(" · ")[0] : "";
+
+  // Remember the last used view for this tab session.
+  useEffect(() => {
+    if (!cat || !(MENU as readonly string[]).includes(view)) return;
+    try { sessionStorage.setItem(LAST_VIEW, view); } catch { /* storage blocked */ }
+  }, [cat, view]);
+
+  // -------------------------------------------------------------- keyboard
+
+  const keys = useRef(createKeyMachine());
+  const goView = useCallback((v: MenuView) => {
+    nav(() => { setView(v); setDetail(null); setEmerge(false); });
+  }, [nav]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const a = keys.current.feed({
+        key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey,
+        typing: isTypingTarget(e.target),
+      });
+      if (!a || help || e.defaultPrevented) return;
+      const l = live.current;
+      const open = catRef.current !== null && !l.wash;
+      switch (a.type) {
+        case "help": e.preventDefault(); setHelp(true); break;
+        case "escape": if (l.detail) { e.preventDefault(); closeDetail(); } break;
+        case "focus-search":
+          if (!open) break;
+          e.preventDefault();
+          if (l.view !== "search" || l.detail) goView("search");
+          requestSearchFocus();
+          break;
+        case "goto": if (open) goView(a.to); break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [help, closeDetail, goView]);
+
+  // ------------------------------------------------------------ callbacks
+
+  const open = useCallback((t: Track) => { nav(() => setDetail(t)); }, [nav]);
   // Picking a song, artist or person from anywhere jumps to the timeline with
   // its nights lit. That is the point of having a timeline at all.
   const onTrace = useCallback((t: Trace) => {
-    setTrace(t); setDetail(null); setView("timeline");
-  }, []);
+    nav(() => { setTrace(t); setDetail(null); setView("timeline"); });
+  }, [nav]);
+  const openNight = useCallback((id: string) => {
+    nav(() => { setEventId(id); setView("browse"); setDetail(null); });
+  }, [nav]);
+  const setNight = useCallback((id: string | null) => nav(() => setEventId(id)), [nav]);
+  const onInsights = useCallback(() => nav(() => setView("insights")), [nav]);
 
-  // Plan and Resolve stay built but are off the menu for now.
+  // Plan and Resolve stay built but are off the menu (#/plan and #/resolve still open them).
   const leftTabs: [View, string][] = [["search", "Search"], ["timeline", "Timeline"]];
   const rightTabs: [View, string][] = [["browse", "Browse"], ["insights", "Insights"]];
-  const pick = (v: View) => { setView(v); setDetail(null); setEmerge(false); };
+  const pick = (v: View) => {
+    nav(() => {
+      // Clicking Browse while already on a night goes back to the list.
+      if (v === "browse" && view === "browse" && !detail) setEventId(null);
+      setView(v); setDetail(null); setEmerge(false);
+    });
+  };
+  const goHome = () => { nav(() => { setView("home"); setDetail(null); setEmerge(false); }); };
+
+  const onPeak = () => {
+    if (navDuringWash.current) { navDuringWash.current = false; return; }   // they already went somewhere
+    const p = pending.current, c = catRef.current;
+    pending.current = null;
+    if (p && c) applyRoute(p, c);
+    else { setView(lastView()); setDetail(null); }
+    setEmerge(true);
+  };
+
+  // ---------------------------------------------------------------- pages
+
+  let page;
+  if (!cat || (view === "home" && !detail)) {
+    page = <Home leaving={wash !== null} onEnter={enter} />;
+  } else if (detail) {
+    page = <TrackDetail track={detail} cat={cat} onClose={closeDetail} onTrace={onTrace} />;
+  } else if (view === "search") {
+    page = <SongSearch cat={cat} onOpen={open} onTrace={onTrace} />;
+  } else if (view === "timeline") {
+    page = (
+      <TimelinePage cat={cat} trace={trace} setTrace={setTrace}
+        selected={selectedNight} setSelected={setSelectedNight}
+        range={range} setRange={setRange} onInsights={onInsights}
+        onOpen={open} onOpenNight={openNight} onTrace={onTrace} />
+    );
+  } else if (view === "browse") {
+    page = <BrowseView cat={cat} weather={weather} onOpen={open} eventId={eventId} setEventId={setNight} />;
+  } else if (view === "insights") {
+    page = <Insights cat={cat} range={range} onRange={setRange} onTrace={onTrace} onOpenNight={openNight} />;
+  } else if (view === "plan") {
+    page = <Planner cat={cat} range={range} onRange={setRange} onTrace={onTrace} onOpenNight={openNight} />;
+  } else {
+    page = <Resolver cat={cat} />;
+  }
 
   return (
     <>
+      <a className="skip-link" href="#main"
+        onClick={(e) => { e.preventDefault(); scrollRef.current?.focus({ preventScroll: true }); }}>
+        Skip to content
+      </a>
       <Starfield />
       <div className="vignette" />
       <div className="shell">
         <header className={`topbar${view === "home" ? " is-home" : ""}`}>
           {cat ? <TabRail items={leftTabs} view={view} dimmed={!!detail} side="left" onPick={pick} /> : <span />}
-          <Logo onHome={() => { setView("home"); setDetail(null); setEmerge(false); }} />
+          <Logo onHome={goHome} />
           {cat ? <TabRail items={rightTabs} view={view} dimmed={!!detail} side="right" onPick={pick} /> : <span />}
         </header>
 
-        <div className={`scroll${view === "home" ? " is-home" : ""}`}>
+        <main id="main" tabIndex={-1} ref={scrollRef} className={`scroll${view === "home" ? " is-home" : ""}`}>
           <div className={emerge ? "emerge" : undefined}>
-          {!cat || (view === "home" && !detail) ? (
-            <Home leaving={wash !== null} onEnter={enter}
-              onSkip={() => { if (cat) { setView("search"); setEmerge(false); } }} />
-          ) : detail ? <TrackDetail track={detail} cat={cat} onClose={close} onTrace={onTrace} />
-            : view === "search" ? <SongSearch cat={cat} onOpen={open} onTrace={onTrace} />
-            : view === "timeline" ? (
-              <div className="page wide">
-                <h1>The decade</h1>
-                <p className="sub">
-                  Every night at its real date — the gaps are as much the story as the
-                  clusters. Height is how long the night ran; the lanes show who was there.
-                </p>
-                <div className={`tlgrid${selectedNight ? " with-panel" : ""}`}>
-                  <div className="tlmain">
-                    <Timeline
-                      cat={cat} trace={trace}
-                      onClearTrace={() => setTrace(null)}
-                      selected={selectedNight} onSelect={setSelectedNight}
-                      range={range} onRange={setRange}
-                      onInsights={() => setView("insights")}
-                    />
-                    {trace && <TraceList cat={cat} trace={trace} onOpen={open} />}
-                  </div>
-                  {selectedNight && (
-                    <NightPanel
-                      cat={cat} eventId={selectedNight}
-                      onClose={() => setSelectedNight(null)}
-                      onOpenTrack={open}
-                      onOpenNight={(id) => { setEventId(id); setView("browse"); }}
-                      onPerson={(pid) => {
-                        const p = cat.people.find((x) => x.id === pid);
-                        onTrace({
-                          kind: "person", id: pid, label: p?.name ?? pid,
-                          nights: new Set(cat.events
-                            .filter((e) => isShown(e) && e.people.includes(pid))
-                            .map((e) => e.id)),
-                        });
-                      }} />
-                  )}
-                </div>
-              </div>
-            )
-            : view === "browse" ? (
-              <BrowseView cat={cat} weather={weather} onOpen={open}
-                eventId={eventId} setEventId={setEventId} />
-            )
-            : view === "insights" ? (
-              <Insights cat={cat} range={range} onRange={setRange} onTrace={onTrace}
-                onOpenNight={(id) => { setEventId(id); setView("browse"); }} />
-            )
-            : view === "plan" ? (
-              <Planner cat={cat} range={range} onRange={setRange} onTrace={onTrace}
-                onOpenNight={(id) => { setEventId(id); setView("browse"); }} />
-            )
-            : <Resolver cat={cat} />}
+            <ErrorBoundary resetKey={route.name + ("id" in route ? route.id : "")}>
+              <Suspense fallback={<Loader />}>{page}</Suspense>
+            </ErrorBoundary>
           </div>
-        </div>
+        </main>
       </div>
       {wash && (
         <Wash x={wash.x} y={wash.y} reduced={prefersReducedMotion()}
-          onPeak={() => { setView("search"); setDetail(null); setEmerge(true); }}
-          onDone={() => setWash(null)} />
+          onPeak={onPeak} onDone={() => setWash(null)} />
       )}
+      {help && <KeyHelp onClose={() => setHelp(false)} />}
+      <div className="mdc-sr" role="status" aria-live="polite">{announce}</div>
     </>
   );
 }

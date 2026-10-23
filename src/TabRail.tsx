@@ -21,7 +21,8 @@ export default function TabRail<V extends string>({ items, view, dimmed, side, o
     if (!el || !here) { setGlide(null); return; }
     const measure = () => {
       const t = el.querySelector<HTMLElement>(`[data-view="${view}"]`);
-      if (t) setGlide({ x: t.offsetLeft, w: t.offsetWidth });
+      // Same numbers again (the observer fires for every tab): keep the old object, skip the render.
+      if (t) setGlide((g) => (g && g.x === t.offsetLeft && g.w === t.offsetWidth ? g : { x: t.offsetLeft, w: t.offsetWidth }));
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -31,7 +32,7 @@ export default function TabRail<V extends string>({ items, view, dimmed, side, o
   }, [view, here]);
 
   return (
-    <nav className={`tabs ${side}`} ref={nav}>
+    <nav className={`tabs ${side}`} ref={nav} aria-label={side === "left" ? "Main menu" : "Main menu, continued"}>
       {glide && !dimmed && (
         <span className="tabglide" aria-hidden="true"
           style={{ ["--gx" as string]: `${glide.x}px`, ["--gw" as string]: `${glide.w}px` }} />

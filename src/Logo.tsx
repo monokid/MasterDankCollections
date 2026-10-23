@@ -32,6 +32,7 @@ export default function Logo({ onHome }: { onHome: () => void }) {
   const grains = useRef<Array<SVGCircleElement | null>>([]);
   const vac = useRef<Array<SVGCircleElement | null>>([]);
   const ring = useRef<SVGCircleElement>(null);
+  const svg = useRef<SVGSVGElement>(null);
   const kick = useRef<(power: number) => void>(() => {});
 
   useEffect(() => {
@@ -54,7 +55,7 @@ export default function Logo({ onHome }: { onHome: () => void }) {
     let next = last + rnd(1800, 4200);
     let raf = 0;
 
-    kick.current = (power: number) => { v += power; rippleAt = performance.now(); rippleAmp = Math.min(1, power / 9); };
+    kick.current = (power: number) => { v = Math.min(v + power, 14); rippleAt = performance.now(); rippleAmp = Math.min(1, power / 9); };
 
     const draw = (now: number) => {
       const s = 1 + x * 0.11;
@@ -105,14 +106,22 @@ export default function Logo({ onHome }: { onHome: () => void }) {
     };
 
     if (reduced) { draw(performance.now()); return; }
+    // The header is hidden (not unmounted) while Home is showing; don't animate
+    // a creature nobody can see. Checked twice a second, not every frame.
+    let hidden = false, checked = 0;
     const frame = (now: number) => {
+      raf = requestAnimationFrame(frame);
+      if (now - checked > 500) {
+        checked = now;
+        hidden = document.hidden || (svg.current !== null && getComputedStyle(svg.current).visibility === "hidden");
+      }
+      if (hidden) { last = now; return; }
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now; t += dt;
       if (now > next) { kick.current(rnd(5, 9)); next = now + rnd(2500, 7500); }
       v += (-70 * x - 6.5 * v) * dt;         // under-damped: a springy double beat
       x += v * dt;
       draw(now);
-      raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
@@ -122,7 +131,7 @@ export default function Logo({ onHome }: { onHome: () => void }) {
     <a className="logo" href={import.meta.env.BASE_URL} aria-label="Master Dank Collections, home"
       onClick={(e) => { e.preventDefault(); onHome(); }}
       onMouseEnter={() => kick.current(9)}>
-      <svg className="logo-mark" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+      <svg ref={svg} className="logo-mark" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
         <defs>
           <radialGradient id="am-body" cx="0.38" cy="0.32" r="0.85">
             <stop offset="0" stopColor="#7be9ff" stopOpacity="0.95" />
@@ -135,26 +144,12 @@ export default function Logo({ onHome }: { onHome: () => void }) {
             <stop offset="0.5" stopColor="#62e8ff" />
             <stop offset="1" stopColor="#ff7ad9" />
           </linearGradient>
-          <radialGradient id="am-c0" cx="0.38" cy="0.34" r="0.8">
-            <stop offset="0" stopColor="{HUES[0][0]}" />
-            <stop offset="1" stopColor="{HUES[0][1]}" />
-          </radialGradient>
-          <radialGradient id="am-c1" cx="0.38" cy="0.34" r="0.8">
-            <stop offset="0" stopColor="{HUES[1][0]}" />
-            <stop offset="1" stopColor="{HUES[1][1]}" />
-          </radialGradient>
-          <radialGradient id="am-c2" cx="0.38" cy="0.34" r="0.8">
-            <stop offset="0" stopColor="{HUES[2][0]}" />
-            <stop offset="1" stopColor="{HUES[2][1]}" />
-          </radialGradient>
-          <radialGradient id="am-c3" cx="0.38" cy="0.34" r="0.8">
-            <stop offset="0" stopColor="{HUES[3][0]}" />
-            <stop offset="1" stopColor="{HUES[3][1]}" />
-          </radialGradient>
-          <radialGradient id="am-c4" cx="0.38" cy="0.34" r="0.8">
-            <stop offset="0" stopColor="{HUES[4][0]}" />
-            <stop offset="1" stopColor="{HUES[4][1]}" />
-          </radialGradient>
+          {HUES.map(([lo, hi], i) => (
+            <radialGradient key={i} id={`am-c${i}`} cx="0.38" cy="0.34" r="0.8">
+              <stop offset="0" stopColor={lo} />
+              <stop offset="1" stopColor={hi} />
+            </radialGradient>
+          ))}
         </defs>
         <g className="am-hue">
           <circle ref={ring} cx="32" cy="32" r="17" fill="none" stroke="url(#am-rim)" strokeWidth="1.1" opacity="0" />

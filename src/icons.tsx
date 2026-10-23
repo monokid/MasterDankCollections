@@ -135,3 +135,43 @@ export function Thermometer({ size = 20 }: { size?: number }) {
     </Svg>
   );
 }
+
+// ---------------------------------------------------------------- controls
+
+export function CopyIcon({ size = 16 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <rect x={9} y={9} width={11} height={11} rx={2.5} />
+      <path d="M15 9V6.5A2.5 2.5 0 0 0 12.5 4h-6A2.5 2.5 0 0 0 4 6.5v6A2.5 2.5 0 0 0 6.5 15H9" />
+    </Svg>
+  );
+}
+
+export function DownloadIcon({ size = 16 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <path d="M12 4v11" /><path d="M7.5 10.5 12 15l4.5-4.5" /><path d="M5 19.5h14" />
+    </Svg>
+  );
+}
+
+/** Points down; CSS turns it for a closed section. */
+export function ChevronIcon({ size = 16 }: { size?: number }) {
+  return <Svg size={size}><path d="M6 9.5l6 6 6-6" /></Svg>;
+}
+
+export function ExternalIcon({ size = 16 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10" />
+    </Svg>
+  );
+}
+
+export function CloseIcon({ size = 16 }: { size?: number }) {
+  return <Svg size={size}><path d="M6 6l12 12" /><path d="M18 6L6 18" /></Svg>;
+}
+
+export function SearchIcon({ size = 18 }: { size?: number }) {
+  return <Svg size={size}><circle cx={10.5} cy={10.5} r={6} /><path d="M15 15l5 5" /></Svg>;
+}

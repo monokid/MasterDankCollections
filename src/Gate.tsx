@@ -16,7 +16,7 @@ const MESSAGES: Record<Status, string> = {
   error: "the vault is out of reach. try again",
 };
 
-export default function Gate({ attempt, onSuccess, onClose, closing, control }: {
+export default function Gate({ attempt, onSuccess, onClose, closing, control, returnFocus }: {
   /** Resolves true when the word opened the vault; the caller reacts to a wrong one. */
   attempt: (pw: string) => Promise<boolean>;
   onSuccess: () => void;
@@ -24,6 +24,8 @@ export default function Gate({ attempt, onSuccess, onClose, closing, control }: 
   /** The panel is fading out (success). */
   closing: boolean;
   control?: MutableRefObject<GateControl | null>;
+  /** Where focus goes when the gate closes without a way in, if it was opened with no focused element (Enter on the page). */
+  returnFocus?: () => HTMLElement | null;
 }) {
   const [value, setValue] = useState("");
   const [show, setShow] = useState(false);
@@ -36,6 +38,8 @@ export default function Gate({ attempt, onSuccess, onClose, closing, control }: 
   const opener = useRef<Element | null>(document.activeElement);
   const cb = useRef({ attempt, onSuccess, onClose });
   cb.current = { attempt, onSuccess, onClose };
+  const back = useRef(returnFocus);
+  back.current = returnFocus;
   const id = useId();
 
   useEffect(() => {
@@ -44,7 +48,9 @@ export default function Gate({ attempt, onSuccess, onClose, closing, control }: 
     const from = opener.current as HTMLElement | null;
     return () => {
       alive.current = false;
-      if (from && from.isConnected && typeof from.focus === "function") from.focus();
+      // Give focus back to whatever opened the gate; if that was the page itself, to the amoeba.
+      const target = from && from !== document.body && from.isConnected ? from : back.current?.() ?? null;
+      if (target && target.isConnected && typeof target.focus === "function") target.focus();
     };
   }, []);
 
@@ -104,7 +110,7 @@ export default function Gate({ attempt, onSuccess, onClose, closing, control }: 
           <input ref={input} id={inId} className="gate-input" name="gate-word"
             type={show ? "text" : "password"} value={value} readOnly={pending}
             placeholder="whisper it..." autoFocus autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
-            aria-invalid={status === "wrong"}
+            aria-invalid={status === "wrong" || status === "error"}
             onChange={(e) => { setValue(e.target.value); if (status === "wrong" || status === "error") setStatus("idle"); }} />
           <button type="button" className="gate-eye" aria-pressed={show}
             aria-label={show ? "Hide the word" : "Show the word"} onClick={() => setShow((s) => !s)}>

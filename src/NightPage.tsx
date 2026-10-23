@@ -1,22 +1,22 @@
 /** One night, in full: a sticky bar to move between nights and jump between
  *  people, the night's totals and sky, then each person's set with the numbers
  *  that say how their phases divide their time. */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Catalog, Event, Track } from "./catalog.ts";
 import { TYPE_COLOUR, personColour } from "./colours.ts";
 import { nightStats, type PersonStat } from "./nightstats.ts";
-import { byPlayOrder, fmtSpan, TrackRow } from "./rows.tsx";
+import { byPlayOrder, TrackRow } from "./rows.tsx";
 import Sky from "./Sky.tsx";
 import type { WeatherMap } from "./weather.ts";
+import { fmtCount, fmtDate as short, fmtDateLong as long, fmtHours, fmtSpan, pct, plural } from "./format.ts";
+import { copyText, scrollRootOf, sectionAt, setlistText, splitSet } from "./pagehelpers.ts";
+import { useToast } from "./Toast.tsx";
+import { ChevronIcon, CopyIcon } from "./icons.tsx";
+import "./pages.css";
 
-const long = (iso: string) =>
-  new Date(iso + "T00:00:00").toLocaleDateString(undefined,
-    { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-const short = (iso: string) =>
-  new Date(iso + "T00:00:00").toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+/** Where each night was scrolled to, so coming back from a track lands there. */
+const scrollMemory = new Map<string, number>();
 
-const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
-const pct = (share: number) => `${Math.round(share * 100)}%`;
 const jokeTitle = (e: Event) =>
   e.title && !e.types.includes(e.title.toLowerCase()) ? e.title : "";
 
@@ -27,7 +27,11 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
   onBack: () => void; onGoto: (id: string) => void; onOpen: (t: Track) => void;
 }) {
   const barRef = useRef<HTMLDivElement>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState<string | null>(null);
+  // People whose set is folded away. CSS does the hiding, so a print still has every set.
+  const [folded, setFolded] = useState<Set<string>>(() => new Set());
+  const { toast, node: toastNode } = useToast();
 
   const trackById = useMemo(() => new Map(cat.tracks.map((t) => [t.id, t])), [cat]);
   const dated = useMemo(
@@ -56,10 +60,12 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
       const pid = stat.personId ?? "";
       const list = byPerson.get(pid)!;
       const i = cat.people.findIndex((p) => p.id === pid);
+      const phaseIds = stat.byPhase.filter((b) => b.phase).map((b) => b.phase!.id);
+      const played = list.filter((t) => t.played).sort(byPlayOrder);
       return {
-        pid, stat, colour: i >= 0 ? personColour(i) : "var(--ink-faint)",
+        pid, stat, split: splitSet(played, phaseIds), colour: i >= 0 ? personColour(i) : "var(--ink-faint)",
         person: i >= 0 ? cat.people[i] : null,
-        played: list.filter((t) => t.played).sort(byPlayOrder),
+        played,
         // what the distiller did not count: anonymised copies of a named list,
         // and playlist entries that repeat a file. Kept apart, not hidden.
         others: list.filter((t) => !t.played).sort(byPlayOrder),
@@ -68,34 +74,55 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
     return { stats, sets, copies: tracks.filter((t) => !t.played).length };
   }, [cat, ev.id]);
 
-  // New night: start at the top.
-  useEffect(() => {
-    barRef.current?.closest(".scroll")?.scrollTo({ top: 0, behavior: "instant" });
+  // A new night starts at the top. The first one shown is the exception: coming
+  // back from a track, the page returns to where it was.
+  const first = useRef({ id: null as string | null, saved: scrollMemory.get(ev.id) });
+  useLayoutEffect(() => {
+    const restore = first.current.id === null || first.current.id === ev.id ? first.current.saved : undefined;
+    first.current.id = ev.id;
+    scrollRootOf(barRef.current)?.scrollTo({ top: restore ?? 0, behavior: "instant" });
     setActive(null);
+    setFolded(new Set());
   }, [ev.id]);
 
   // Scroll-spy: the person whose section the bar has passed last.
+  const personIds = sets.map((s) => s.pid || "none");
+  const idsKey = personIds.join("|");
   useEffect(() => {
-    const root = barRef.current?.closest(".scroll") as HTMLElement | null;
+    const root = scrollRootOf(barRef.current);
     if (!root) return;
     let raf = 0;
     const spy = () => {
       raf = 0;
+      scrollMemory.set(ev.id, root.scrollTop);
       const line = root.getBoundingClientRect().top + (barRef.current?.offsetHeight ?? 0) + BAR_GAP;
-      let cur: string | null = null;
-      for (const s of root.querySelectorAll<HTMLElement>("[data-person]")) {
-        if (s.getBoundingClientRect().top <= line) cur = s.dataset.person!;
-        else break;
-      }
-      setActive(cur);
+      const secs = root.querySelectorAll<HTMLElement>("[data-person]");
+      const tops = [...secs].map((s) => s.getBoundingClientRect().top);
+      const atBottom = root.scrollTop > 0 && root.scrollTop + root.clientHeight >= root.scrollHeight - 4;
+      const i = sectionAt(tops, line, atBottom);
+      setActive(i >= 0 ? secs[i].dataset.person! : null);
     };
     const onScroll = () => { if (!raf) raf = requestAnimationFrame(spy); };
     root.addEventListener("scroll", onScroll, { passive: true });
     spy();
     return () => { root.removeEventListener("scroll", onScroll); if (raf) cancelAnimationFrame(raf); };
-  }, [ev.id]);
+  }, [ev.id, idsKey]);
 
-  // Left/right arrows step between nights, unless a field has the keyboard.
+  // Keep the current person's chip in view when the strip scrolls sideways.
+  useEffect(() => {
+    const strip = stripRef.current;
+    const chip = strip?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (!strip || !chip) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    strip.scrollTo({
+      left: chip.offsetLeft - (strip.clientWidth - chip.offsetWidth) / 2,
+      behavior: reduced ? "auto" : "smooth",
+    });
+  }, [active]);
+
+  const back = useCallback(() => { scrollMemory.delete(ev.id); onBack(); }, [ev.id, onBack]);
+
+  // Left/right arrows step between nights, Esc goes back, unless a field has the keyboard.
   useEffect(() => {
     const onKey = (k: KeyboardEvent) => {
       if (k.altKey || k.ctrlKey || k.metaKey || k.shiftKey) return;
@@ -103,17 +130,31 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
       if (t && (t.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName))) return;
       if (k.key === "ArrowLeft" && prev) { k.preventDefault(); onGoto(prev.id); }
       if (k.key === "ArrowRight" && next) { k.preventDefault(); onGoto(next.id); }
+      if (k.key === "Escape") { k.preventDefault(); back(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [prev, next, onGoto]);
+  }, [prev, next, onGoto, back]);
 
   const jump = (pid: string) => {
     const root = barRef.current?.closest(".scroll") as HTMLElement | null;
     const sec = root?.querySelector<HTMLElement>(`[data-person="${pid}"]`);
     if (!root || !sec) return;
     const top = sec.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop;
-    root.scrollTo({ top: top - (barRef.current?.offsetHeight ?? 0) - 8, behavior: "smooth" });
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    root.scrollTo({ top: top - (barRef.current?.offsetHeight ?? 0) - 8, behavior: reduced ? "auto" : "smooth" });
+    setActive(pid);
+  };
+
+  const allFolded = sets.length > 0 && folded.size === sets.length;
+  const toggleFold = (pid: string) => setFolded((f) => {
+    const n = new Set(f);
+    if (n.has(pid)) n.delete(pid); else n.add(pid);
+    return n;
+  });
+  const copySet = async (name: string, list: Track[]) => {
+    const ok = await copyText(setlistText(list));
+    toast(ok ? `Copied ${plural(list.length, "line")} from ${name}'s set` : "Could not copy to the clipboard");
   };
 
   const isNight = ev.kind !== "collection";
@@ -125,10 +166,10 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
     <div className="nightpage">
       <div className="nightbar" ref={barRef}>
         <div className="nb-row">
-          <button className="nb-back" onClick={onBack}>← Browse</button>
+          <button className="nb-back" onClick={back} title="Back to all nights (Esc)">← Browse</button>
           <button className="nb-step" disabled={!prev} onClick={() => prev && onGoto(prev.id)}
             title={prev ? `Earlier night: ${short(prev.date!)} (left arrow)` : "No earlier night"}
-            aria-label="Previous night">‹</button>
+            aria-label="Previous night" aria-keyshortcuts="ArrowLeft">‹</button>
           <div className="nb-now">
             <b>{isNight && ev.date ? short(ev.date) : ev.folder}</b>
             {kinds.map((t) => (
@@ -137,17 +178,25 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
           </div>
           <button className="nb-step" disabled={!next} onClick={() => next && onGoto(next.id)}
             title={next ? `Later night: ${short(next.date!)} (right arrow)` : "No later night"}
-            aria-label="Next night">›</button>
-          <span className="nb-pos">{at >= 0 ? `${at + 1} of ${dated.length}` : ""}</span>
+            aria-label="Next night" aria-keyshortcuts="ArrowRight">›</button>
+          <span className="nb-pos">
+            {at >= 0 ? `${at + 1} of ${dated.length}` : ""}
+            <span className="nb-hint" aria-hidden="true"> · <kbd>←</kbd> <kbd>→</kbd> nights · <kbd>Esc</kbd> back</span>
+          </span>
         </div>
         {sets.length > 1 && (
-          <div className="nb-people" role="navigation" aria-label="Jump to a person">
-            {sets.map((s) => (
-              <button key={s.pid || "none"} className="pchip jump" style={{ ["--pc" as string]: s.colour }}
-                aria-current={active === (s.pid || "none")} onClick={() => jump(s.pid || "none")}>
-                {s.person?.name ?? "Unattributed"}<i>{s.stat.songs}</i>
-              </button>
-            ))}
+          <div className="nb-peoplerow">
+            <div className="nb-people strip" ref={stripRef} role="navigation" aria-label="Jump to a person">
+              {sets.map((s) => (
+                <button key={s.pid || "none"} className="pchip jump" style={{ ["--pc" as string]: s.colour }}
+                  aria-current={active === (s.pid || "none")} onClick={() => jump(s.pid || "none")}>
+                  {s.person?.name ?? "Unattributed"}<i>{s.stat.songs}</i>
+                </button>
+              ))}
+            </div>
+            <button className="nb-fold" onClick={() => setFolded(allFolded ? new Set() : new Set(personIds))}>
+              <ChevronIcon size={14} />{allFolded ? "Expand all" : "Collapse all"}
+            </button>
           </div>
         )}
       </div>
@@ -163,8 +212,8 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
               {title && <span className="nh-title">{title}</span>}
             </div>
             <div className="nh-totals">
-              <div><b>{stats.songs}</b><span>songs</span></div>
-              <div><b>{(stats.seconds / 3600).toFixed(1)}</b><span>hours</span></div>
+              <div><b>{fmtCount(stats.songs)}</b><span>songs</span></div>
+              <div><b>{fmtHours(stats.seconds)}</b><span>hours</span></div>
               <div><b>{ev.people.length}</b><span>people</span></div>
               <div><b>{phaseTotal}</b><span>phases</span></div>
               <div title="Songs heard here for the first time in the library's history">
@@ -183,23 +232,39 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
           {isNight && ev.date && <Sky date={ev.date} weather={weather[ev.date]} large />}
         </header>
 
-        {sets.map(({ pid, stat, colour, person, played, others }) => {
-          const loose = played.filter((t) => !t.phaseId || !stat.byPhase.some((b) => b.key === t.phaseId));
+        {sets.map(({ pid, stat, colour, person, others, split }) => {
+          const loose = split.loose;
           const named = person?.name ?? "Unattributed";
+          const key = pid || "none";
+          const isFolded = folded.has(key);
           return (
-            <section key={pid || "none"} className="pset" data-person={pid || "none"}
+            <section key={key} className={`pset${isFolded ? " is-folded" : ""}`} data-person={key}
               style={{ ["--pc" as string]: colour }}>
               <div className="pshead">
-                <h2 className="pname"><span className="dot" />{named}</h2>
+                <h2 className="pname">
+                  <button className="pfold" aria-expanded={!isFolded} aria-controls={`set-${key}`}
+                    title={isFolded ? "Show this set" : "Fold this set away"} onClick={() => toggleFold(key)}>
+                    <ChevronIcon size={18} />
+                    <span className="dot" />{named}
+                  </button>
+                </h2>
                 <div className="pmetrics">
                   <span><b>{stat.songs}</b> songs</span>
                   <span><b>{stat.phases}</b> {stat.phases === 1 ? "phase" : "phases"}</span>
                   <span><b>{fmtSpan(stat.seconds)}</b></span>
+                  <button className="copybtn" onClick={() => void copySet(named, split.ordered)}
+                    disabled={!split.ordered.length}
+                    title="Copy this set as plain text, one 'Artist - Title' per line">
+                    <CopyIcon size={14} /> Copy setlist
+                  </button>
                 </div>
               </div>
 
+              <div className="pbody" id={`set-${key}`}>
               {stat.byPhase.length > 1 && (
-                <div className="pdiv" aria-label="How the phases divide this set's time">
+                <div className="pdiv" role="img"
+                  aria-label={`How the phases divide this set's time: ${stat.byPhase
+                    .map((b) => `${b.phase?.clean ?? "not in a phase"} ${pct(b.share)}`).join(", ")}`}>
                   {stat.byPhase.map((b, i) => (
                     <span key={b.key || "loose"} style={{ flexGrow: Math.max(b.share, 0.01) * 1000, opacity: 1 - (i % 2) * 0.4 }}
                       title={`${b.phase?.clean ?? "Not in a phase"} · ${plural(b.songs, "song")} · ${fmtSpan(b.seconds)} · ${pct(b.share)}`} />
@@ -232,7 +297,7 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
                       <span className="meta pct">{pct(b.share)}</span>
                     </div>
                     <div className="rows">
-                      {played.filter((t) => t.phaseId === ph.id).map((t) => (
+                      {(split.byPhase.get(ph.id) ?? []).map((t) => (
                         <TrackRow key={t.id} track={t} cat={cat} query="" onOpen={onOpen} />
                       ))}
                     </div>
@@ -270,10 +335,12 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
                   </div>
                 </details>
               )}
+              </div>
             </section>
           );
         })}
       </div>
+      {toastNode}
     </div>
   );
 }

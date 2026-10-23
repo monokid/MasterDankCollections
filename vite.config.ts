@@ -70,5 +70,14 @@ function noPlaintext(): Plugin {
 export default defineConfig(({ mode }) => ({
   plugins: [react(), noPlaintext()],
   base: mode === "production" ? "/MasterDankCollections/" : "/",
-  build: { outDir: "dist", assetsDir: "assets" },
+  build: {
+    outDir: "dist",
+    assetsDir: "assets",
+    rollupOptions: {
+      output: {
+        // React rarely changes; on its own it stays cached across deploys of the app code.
+        manualChunks: (id: string) => (/node_modules[\/](react|react-dom|scheduler)[\/]/.test(id) ? "react" : undefined),
+      },
+    },
+  },
 }));

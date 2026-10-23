@@ -6,11 +6,9 @@
  */
 import { useMemo } from "react";
 import type { Catalog, Track } from "./catalog.ts";
-
-const fmtDur = (s: number | null) =>
-  s ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}` : "";
-
-const byPlayOrder = (a: Track, b: Track) => (a.playOrder ?? 1e9) - (b.playOrder ?? 1e9);
+import { fmtDateLong, fmtHours, fmtDur, plural } from "./format.ts";
+import { byPlayOrder } from "./rows.tsx";
+import "./pages.css";
 
 export default function NightPanel({ cat, eventId, onClose, onOpenTrack, onOpenNight, onPerson }: {
   cat: Catalog;
@@ -52,10 +50,7 @@ export default function NightPanel({ cat, eventId, onClose, onOpenTrack, onOpenN
     () => new Map(cat.songs.map((s) => [s.id, s.nights.length])), [cat]);
 
   if (!ev) return null;
-  const date = ev.date
-    ? new Date(ev.date + "T00:00:00").toLocaleDateString(undefined,
-      { weekday: "long", year: "numeric", month: "long", day: "numeric" })
-    : ev.folder;
+  const date = ev.date ? fmtDateLong(ev.date) : ev.folder;
 
   return (
     <aside className="nightpanel" aria-label="Night detail">
@@ -68,12 +63,12 @@ export default function NightPanel({ cat, eventId, onClose, onOpenTrack, onOpenN
             {ev.types.join(" + ") || ev.type || "night"}
           </div>
         </div>
-        <button className="np-x" onClick={onClose} aria-label="Close">✕</button>
+        <button className="np-x" onClick={onClose} aria-label="Close night detail" title="Close">✕</button>
       </div>
 
       <div className="np-stats">
         <div><b>{ev.playedCount}</b><span>tracks</span></div>
-        <div><b>{(ev.durationSec / 3600).toFixed(1)}</b><span>hours</span></div>
+        <div><b>{fmtHours(ev.durationSec)}</b><span>hours</span></div>
         <div><b>{ev.people.length}</b><span>people</span></div>
         <div><b>{ev.debuts}</b><span>debuts</span></div>
       </div>
@@ -86,7 +81,7 @@ export default function NightPanel({ cat, eventId, onClose, onOpenTrack, onOpenN
             <button className="np-who" onClick={() => s.pid && onPerson(s.pid)}
               title="Light up every night this person was at">
               {s.name}
-              <span>{s.count} track{s.count === 1 ? "" : "s"}</span>
+              <span>{plural(s.count, "track")}</span>
             </button>
             {s.groups.map(([pid, tracks]) => {
               const ph = pid ? s.phase.get(pid) : null;

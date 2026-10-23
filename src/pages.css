@@ -1,0 +1,233 @@
+/* The pages' own styles: Search, Browse, the night page, Insights, the drill
+ * panel, and the Toast. Where a rule has to win over styles.css it is prefixed
+ * with .shell (this file can load before or after styles.css). Small text here
+ * uses --ink-dim, not --ink-faint, which is under 4.5:1 on the dark panels. */
+
+/* ------------------------------------------------------------ shared bits */
+
+.faint { opacity: 0.55; }
+.emptyacts { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 16px; }
+.nomargin.nomargin { margin-left: 0; }
+
+/* A row that can scroll sideways, with its ends fading out. */
+.strip {
+  display: flex; gap: 7px; overflow-x: auto; scrollbar-width: none; padding: 3px 14px;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+}
+.strip::-webkit-scrollbar { display: none; }
+.strip > * { flex: none; white-space: nowrap; }
+
+.shell .searchclear:focus-visible, .linkbtn:focus-visible, .copybtn:focus-visible, .csvbtn:focus-visible,
+.tocchip:focus-visible, .resetrange:focus-visible, .secfold:focus-visible, .pfold:focus-visible,
+.nb-fold:focus-visible, .spot:focus-visible, .shell .dr-btn:focus-visible, .shell .tl-clear:focus-visible,
+.shell .dr-item:focus-visible, .shell .dr-back:focus-visible, .shell .np-x:focus-visible,
+.low.clickable:focus-visible, .reading.clickable:focus-visible, .stack-col:focus-visible,
+.shell .filters select:focus-visible, .shell .filters input:focus-visible, .pl-row:focus-visible,
+.shell .np-track:focus-visible, .shell .np-who:focus-visible, .shell .np-open:focus-visible {
+  outline: 2px solid var(--accent-2); outline-offset: 2px;
+}
+.drill:focus, .nightpanel:focus { outline: none; }
+
+/* -------------------------------------------------------------------- toast */
+
+.toast-host { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); z-index: 60; pointer-events: none; }
+.toast {
+  background: rgba(24, 18, 56, 0.97); border: 1px solid var(--panel-edge); color: var(--ink);
+  padding: 9px 18px; border-radius: 999px; font-size: 13px; box-shadow: var(--shadow);
+  animation: toast-in 0.22s ease-out;
+}
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* ------------------------------------------------------------------- search */
+
+/* The box and the filters stay put while the results scroll under them. */
+.sstick {
+  position: sticky; top: 0; z-index: 5; margin: 0 -22px 6px; padding: 10px 22px 4px;
+  background: linear-gradient(180deg, rgba(8, 6, 22, 0.95) 80%, rgba(8, 6, 22, 0));
+  backdrop-filter: blur(10px);
+}
+.sstick .searchwrap { margin-bottom: 10px; }
+.sstick .filters { margin-bottom: 8px; }
+@media (max-width: 720px) { .sstick { margin: 0 -14px 6px; padding: 8px 14px 4px; } }
+@media (max-height: 560px) { .sstick { position: static; } }
+
+.shell .searchwrap .searchbox { padding-right: 48px; }
+.searchclear {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  width: 30px; height: 30px; display: grid; place-items: center; cursor: pointer;
+  appearance: none; border: 0; border-radius: 50%; color: var(--ink-dim);
+  background: rgba(150, 120, 255, 0.14);
+}
+.searchclear:hover { background: rgba(185, 140, 255, 0.34); color: var(--ink); }
+
+.rcount { margin-left: auto; display: inline-flex; align-items: center; gap: 14px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.linkbtn {
+  appearance: none; background: none; border: 0; cursor: pointer; font: inherit; font-size: 12.5px;
+  color: var(--accent); display: inline-flex; align-items: center; gap: 5px; padding: 2px 5px; border-radius: 6px;
+}
+.linkbtn:hover { text-decoration: underline; color: var(--ink); }
+
+/* ~3,000 rows: the browser skips the ones off-screen. An unfolded song is left
+ * alone (its height is not the estimate). Outlines go inside, as paint
+ * containment would clip them. */
+.resultlist .songgroup:not(.open) { content-visibility: auto; contain-intrinsic-size: auto 46px; }
+.resultlist.stale { opacity: 0.55; transition: opacity 0.15s; }
+.resultlist .row, .resultlist .play { scroll-margin-top: 190px; scroll-margin-bottom: 40px; }
+.shell .resultlist .row:focus-visible, .shell .resultlist .play:focus-visible {
+  outline: 2px solid var(--accent-2); outline-offset: -2px; background: rgba(46, 34, 92, 0.8);
+}
+.more { display: grid; place-items: center; padding: 18px 0 6px; }
+
+/* ------------------------------------------------------ track rows (shared) */
+
+.rowx { position: relative; }
+.shell .rowx > .row { padding-right: 48px; }
+.rowx .spot {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px;
+  color: var(--ink-dim); opacity: 0.65;
+}
+.rowx:hover .spot, .rowx:focus-within .spot, .rowx .spot:focus-visible { opacity: 1; }
+.rowx .spot:hover { background: rgba(110, 245, 192, 0.16); color: var(--ok); }
+.shell .rowx > .row:focus-visible { outline: 2px solid var(--accent-2); outline-offset: -2px; }
+@media (max-width: 720px) { .shell .rowx > .row { padding-right: 44px; } }
+
+/* --------------------------------------------------------------- night page */
+
+.shell .nightbar .nb-peoplerow { max-width: 1136px; margin: 8px auto 0; display: flex; align-items: center; gap: 10px; }
+.shell .nb-peoplerow .nb-people.strip { flex: 1; min-width: 0; margin: 0; flex-wrap: nowrap; }
+.nb-fold {
+  flex: none; appearance: none; font: inherit; font-size: 12px; cursor: pointer; color: var(--ink-dim);
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px; border-radius: 999px;
+  background: rgba(150, 120, 255, 0.1); border: 1px solid var(--panel-edge);
+}
+.nb-fold:hover { color: var(--ink); background: rgba(185, 140, 255, 0.24); }
+.nb-hint { color: var(--ink-dim); margin-left: 4px; }
+.nb-hint kbd {
+  font: inherit; font-size: 10.5px; padding: 0 5px; border: 1px solid var(--panel-edge);
+  border-radius: 4px; color: var(--ink-dim);
+}
+@media (max-width: 900px) { .nb-hint { display: none; } }
+
+.pfold {
+  appearance: none; background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
+  font: inherit; color: inherit; letter-spacing: inherit; text-align: left;
+  display: flex; align-items: center; gap: 12px; border-radius: 8px;
+}
+.pfold svg { opacity: 0.45; flex: none; transition: transform 0.15s, opacity 0.15s; }
+.pfold:hover svg { opacity: 1; }
+.pset.is-folded .pfold svg { transform: rotate(-90deg); }
+.pset.is-folded .pbody { display: none; }
+
+.copybtn {
+  appearance: none; font: inherit; font-size: 12px; cursor: pointer; color: var(--ink-dim);
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 999px;
+  background: rgba(150, 120, 255, 0.1); border: 1px solid var(--panel-edge);
+}
+.copybtn:hover:not(:disabled) { color: var(--ink); background: rgba(185, 140, 255, 0.24); }
+.copybtn:disabled { opacity: 0.4; cursor: default; }
+
+/* ----------------------------------------------------------------- insights */
+
+.charthead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.charthead h2 { margin: 0 0 12px; min-width: 0; }
+.csvbtn {
+  flex: none; appearance: none; font: inherit; font-size: 11.5px; cursor: pointer; color: var(--ink-dim);
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 7px;
+  background: transparent; border: 1px solid var(--panel-edge); opacity: 0.8;
+}
+.csvbtn:hover { opacity: 1; color: var(--ink); background: rgba(185, 140, 255, 0.2); }
+
+.instoc {
+  position: sticky; top: 6px; z-index: 7; display: flex; align-items: center; gap: 10px;
+  margin: 0 0 14px; padding: 6px 8px;
+  background: rgba(8, 6, 22, 0.9); backdrop-filter: blur(14px);
+  border: 1px solid var(--panel-edge); border-radius: 12px;
+}
+.toc-chips { flex: 1; min-width: 0; padding: 2px 12px; }
+.tocchip {
+  appearance: none; font: inherit; font-size: 12.5px; cursor: pointer; color: var(--ink-dim);
+  padding: 5px 13px; border-radius: 999px; background: rgba(150, 120, 255, 0.1);
+  border: 1px solid var(--panel-edge); transition: background 0.14s, color 0.14s;
+}
+.tocchip:hover { color: var(--ink); background: rgba(185, 140, 255, 0.22); }
+.tocchip[aria-current="true"] { color: #16092b; background: var(--accent); border-color: var(--accent); font-weight: 620; }
+.toc-range { flex: none; display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--ink-dim); white-space: nowrap; }
+.toc-range b { color: var(--ink); font-weight: 600; }
+.resetrange {
+  appearance: none; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; color: var(--ink);
+  padding: 5px 13px; border-radius: 999px; background: rgba(98, 232, 255, 0.14);
+  border: 1px solid rgba(98, 232, 255, 0.5);
+}
+.resetrange:hover { background: rgba(98, 232, 255, 0.28); }
+@media (max-width: 900px) { .instoc { flex-wrap: wrap; } .toc-chips { flex-basis: 100%; } }
+
+.inssec { scroll-margin-top: 70px; }
+.secfold {
+  appearance: none; background: none; border: 0; cursor: pointer; font: inherit; color: inherit;
+  letter-spacing: inherit; text-transform: inherit; display: inline-flex; align-items: center; gap: 9px;
+  padding: 4px 8px 4px 4px; margin-left: -4px; border-radius: 8px;
+}
+.secfold svg { opacity: 0.55; transition: transform 0.15s; }
+.secfold:hover { color: var(--ink); }
+.secfold:hover svg { opacity: 1; }
+.inssec.is-folded .secfold svg { transform: rotate(-90deg); }
+.ins-main.is-updating .inssec { opacity: 0.55; transition: opacity 0.15s; }
+
+.skel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 20px; }
+.skel { padding: 20px; min-height: 320px; display: flex; flex-direction: column; gap: 14px; }
+.skel-line {
+  display: block; height: 14px; border-radius: 7px;
+  background: linear-gradient(90deg, rgba(150, 120, 255, 0.1) 25%, rgba(150, 120, 255, 0.24) 50%, rgba(150, 120, 255, 0.1) 75%);
+  background-size: 200% 100%; animation: skel-shimmer 1.4s linear infinite;
+}
+.skel-line.w60 { width: 60%; height: 18px; margin-bottom: 8px; }
+@keyframes skel-shimmer { to { background-position: -200% 0; } }
+
+/* ------------------------------------------------------------- drill panel */
+
+/* Below this width a side column would squeeze the charts, and a panel stacked
+ * under them would open out of sight. It becomes a sheet over the bottom of
+ * the screen; the page gets room below so the charts above stay reachable. */
+@media (max-width: 1000px) {
+  .shell .page.insights.has-drill { grid-template-columns: minmax(0, 1fr); }
+  .shell .insights .drill {
+    position: fixed; left: 10px; right: 10px; bottom: 10px; top: auto; z-index: 30;
+    max-height: 56vh; animation-name: sheet-in;
+  }
+  .shell .insights.has-drill .ins-main { padding-bottom: 58vh; }
+}
+@keyframes sheet-in { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+
+/* ------------------------------------------------------------------- motion */
+
+@media (prefers-reduced-motion: reduce) {
+  .toast, .skel-line, .shell .insights .drill { animation: none; }
+  .pfold svg, .secfold svg, .resultlist.stale, .ins-main.is-updating .inssec { transition: none; }
+}
+
+/* -------------------------------------------------------------------- print */
+
+/* A night prints as a setlist: black on white, no controls, every set open. */
+@media print {
+  html, body, #root, .shell, .scroll { height: auto !important; overflow: visible !important; display: block !important; position: static !important; }
+  body, .scroll { background: #fff !important; }
+  .starfield, .vignette, .topbar, .nightbar, .toast-host, .copybtn, .nb-hint, .sky, .skyblock,
+  details.anonlist, .rowx .spot, .pfold svg, .pdiv, .pshare, .instoc, .csvbtn, .drill, .sstick .filters { display: none !important; }
+  .nightpage, .nightpage *, .page, .page * {
+    color: #000 !important; background: transparent !important; box-shadow: none !important;
+    text-shadow: none !important; backdrop-filter: none !important; filter: none !important;
+    animation: none !important; border-color: #999 !important;
+  }
+  .page { max-width: none !important; padding: 0 !important; }
+  .pset.is-folded .pbody { display: block !important; }
+  .pset { margin-top: 18pt !important; break-inside: auto; }
+  .pshead, .phasehead { break-after: avoid; }
+  .rowx, .row { break-inside: avoid; }
+  .nightpage .row { grid-template-columns: minmax(0, 1fr) 180px 80px !important; padding: 2pt 0 !important; border: 0 !important; }
+  .nightpage .row .p { display: none !important; }
+  .nightpage .rowx > .row { padding-right: 0 !important; }
+  .nh-date { font-size: 20pt !important; }
+  .chip { border-color: #999 !important; }
+}

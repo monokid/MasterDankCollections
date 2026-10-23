@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "verify": "tsc --noEmit && tsx tools/guard.ts && tsx tools/distill.test.ts && tsx tools/analytics.test.ts && tsx tools/planner.test.ts && tsx tools/moon.test.ts && tsx tools/nightstats.test.ts && tsx tools/enrich.test.ts && tsx tools/vault.test.ts",
+    "verify": "tsc --noEmit && tsx tools/guard.ts && tsx tools/distill.test.ts && tsx tools/analytics.test.ts && tsx tools/planner.test.ts && tsx tools/moon.test.ts && tsx tools/nightstats.test.ts && tsx tools/enrich.test.ts && tsx tools/vault.test.ts && tsx tools/vaultsession.test.ts && tsx tools/route.test.ts && tsx tools/pages.test.ts",
     "spotify": "tsx tools/spotify.ts",
     "enrich": "tsx tools/enrich.ts",
     "weather": "tsx tools/weather.ts",

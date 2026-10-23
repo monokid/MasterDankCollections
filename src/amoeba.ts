@@ -45,6 +45,7 @@ export interface AmoebaOptions {
 
 const MAXC = 12;   // contributor colours
 const NPOD = 5;    // pseudopods
+const MIN_GAP = 12;  // ms between shader frames: about 80 fps at most
 
 interface Frame {
   t: number;
@@ -935,6 +936,8 @@ export function createAmoeba(host: HTMLElement, opts: AmoebaOptions): Amoeba {
     raf = 0;
     if (!running()) return;
     const raw = now - last;
+    // A 120/144 Hz display gets no benefit from a heavier-than-60 fps shader.
+    if (raw < MIN_GAP) { raf = requestAnimationFrame(tick); return; }
     const dt = Math.min(raw / 1000, 0.1);
     last = now;
     t += dt; growT += dt;

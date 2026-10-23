@@ -1,0 +1,73 @@
+/* Shell furniture owned by App: the page loader, the error panel, the
+ * keyboard-help dialog, the skip link. Page and theme styling lives elsewhere. */
+
+[hidden] { display: none !important; }
+main.scroll:focus { outline: none; }
+
+.mdc-sr {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.skip-link {
+  position: fixed; top: 8px; left: 8px; z-index: 100;
+  padding: 8px 14px; border-radius: 10px;
+  background: var(--panel-solid); color: var(--ink); text-decoration: none;
+  border: 1px solid var(--accent); box-shadow: var(--shadow);
+  transform: translateY(-200%);
+}
+.skip-link:focus { transform: none; }
+
+/* ------------------------------------------------------------------ loader
+ * A small blob that breathes in the amoeba's colours. It fades in after a
+ * beat, so a chunk that arrives quickly never flashes it at all. */
+.mdc-loader {
+  display: grid; place-items: center; min-height: 46vh;
+  opacity: 0; animation: mdc-fade 0.4s ease 0.18s forwards;
+}
+.mdc-blob {
+  width: 54px; height: 54px;
+  background: radial-gradient(circle at 32% 30%, #ff9be0 0%, #b98cff 42%, #62e8ff 100%);
+  box-shadow: 0 0 34px rgba(185, 140, 255, 0.55), 0 0 90px rgba(98, 232, 255, 0.22);
+  animation: mdc-morph 3.2s ease-in-out infinite, mdc-pulse 1.6s ease-in-out infinite;
+}
+@keyframes mdc-fade { to { opacity: 1; } }
+@keyframes mdc-pulse { 50% { transform: scale(1.14); filter: hue-rotate(40deg); } }
+@keyframes mdc-morph {
+  0%, 100% { border-radius: 58% 42% 55% 45% / 48% 56% 44% 52%; }
+  33% { border-radius: 44% 56% 42% 58% / 56% 44% 58% 42%; }
+  66% { border-radius: 52% 48% 60% 40% / 42% 58% 46% 54%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mdc-blob { animation: none; }
+  .mdc-loader { animation-duration: 0.01s; }
+}
+
+/* ------------------------------------------------------------------- error */
+.mdc-oops { text-align: center; max-width: 520px; margin: 14vh auto 0; }
+.mdc-oops h2 { margin: 0 0 8px; font-family: var(--display); }
+.mdc-oops p { color: var(--ink-dim); margin: 0 0 18px; }
+.mdc-oops .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+/* -------------------------------------------------------------- key help */
+.kh-backdrop {
+  position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 20px;
+  background: rgba(5, 4, 16, 0.66); backdrop-filter: blur(3px);
+}
+.kh {
+  width: min(440px, 100%); padding: 20px 22px 18px; border-radius: var(--radius);
+  background: var(--panel-solid); border: 1px solid var(--panel-edge); box-shadow: var(--shadow);
+}
+.kh h2 { margin: 0 0 12px; font-family: var(--display); font-size: 18px; }
+.kh dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin: 0 0 16px; align-items: center; }
+.kh dt { white-space: nowrap; }
+.kh dd { margin: 0; color: var(--ink-dim); }
+.kh kbd {
+  display: inline-block; min-width: 24px; padding: 2px 7px; text-align: center;
+  font: 600 12.5px/1.5 var(--body); color: var(--ink);
+  background: rgba(150, 120, 255, 0.16); border: 1px solid var(--panel-edge);
+  border-bottom-width: 2px; border-radius: 6px;
+}
+.kh .then { color: var(--ink-faint); margin: 0 4px; font-size: 12px; }
+.kh-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.kh-foot span { color: var(--ink-faint); font-size: 12.5px; }

@@ -6,6 +6,9 @@ import { TYPE_COLOUR, personColour } from "./colours.ts";
 import { SHOW_COLLECTIONS } from "./config.ts";
 import Sky from "./Sky.tsx";
 import type { WeatherMap } from "./weather.ts";
+import { fmtCount, fmtHours, plural } from "./format.ts";
+import { useSessionState } from "./hooks.ts";
+import "./pages.css";
 
 const dateParts = (iso: string | null) => {
   if (!iso) return null;
@@ -32,7 +35,7 @@ function NightCard({ ev, cat, weather, flash, onOpen }: {
   return (
     <article id={`night-${ev.id}`} className={`ncard${flash ? " flash" : ""}`}
       tabIndex={0} role="link"
-      aria-label={`${d ? `${d.weekday} ${d.day} ${d.month}` : ev.folder}, ${ev.playedCount} tracks`}
+      aria-label={`${d ? `${d.weekday} ${d.day} ${d.month} ${ev.date!.slice(0, 4)}` : ev.folder}, ${plural(ev.playedCount, "track")}. Open the night`}
       onClick={onOpen}
       onKeyDown={(k) => {
         if (k.key === "Enter" || k.key === " ") { k.preventDefault(); onOpen(); }
@@ -54,8 +57,8 @@ function NightCard({ ev, cat, weather, flash, onOpen }: {
       {title && <div className="nc-title">{title}</div>}
 
       <div className="nc-stats">
-        <span><b>{ev.playedCount}</b> tracks</span>
-        <span><b>{(ev.durationSec / 3600).toFixed(1)}</b> hours</span>
+        <span><b>{fmtCount(ev.playedCount)}</b> tracks</span>
+        <span><b>{fmtHours(ev.durationSec)}</b> hours</span>
         <span><b>{ev.people.length}</b> people</span>
         <span title="Songs heard here for the first time in the library's history">
           <b>{ev.debuts}</b> new
@@ -81,8 +84,11 @@ function NightCard({ ev, cat, weather, flash, onOpen }: {
 export default function EventsList({ cat, weather, focusId, onOpenNight }: {
   cat: Catalog; weather: WeatherMap; focusId: string | null; onOpenNight: (id: string) => void;
 }) {
-  const [newestFirst, setNewestFirst] = useState(true);
-  const [kind, setKind] = useState<string | null>(null);
+  // The sort and the kind filter outlive a visit to a night (and the tab).
+  const [newestFirst, setNewestFirst] = useSessionState("browse.newest", true);
+  const [kind, setKind] = useSessionState<string | null>("browse.kind", null);
+  // A card to scroll to once it is on screen -- it may need the filter cleared first.
+  const [pending, setPending] = useState<{ id: string; smooth: boolean } | null>(null);
   const [activeYear, setActiveYear] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -155,28 +161,32 @@ export default function EventsList({ cat, weather, focusId, onOpenNight }: {
 
   const flash = useCallback((id: string, smooth: boolean) => {
     const el = document.getElementById(`night-${id}`);
-    if (!el) return;
+    if (!el) return false;
     el.scrollIntoView({ block: "center", behavior: smooth ? "smooth" : "instant" });
     setFlashId(id);
     window.setTimeout(() => setFlashId((cur) => (cur === id ? null : cur)), 1800);
     el.focus({ preventScroll: true });
+    return true;
   }, []);
 
   // Coming back from a night, land on the card that was open.
-  useEffect(() => { if (focusId) flash(focusId, false); }, [focusId, flash]);
+  useEffect(() => { if (focusId) setPending({ id: focusId, smooth: false }); }, [focusId]);
 
-  const jumpLatest = () => {
-    if (!latest) return;
-    if (kind && !latest.types.includes(kind)) setKind(null);
-    // let a cleared filter render the card before scrolling to it
-    requestAnimationFrame(() => flash(latest.id, true));
-  };
+  // Runs after every render until the card exists: if the kind filter hides it,
+  // clear the filter and let the next render show it.
+  useEffect(() => {
+    if (!pending) return;
+    if (flash(pending.id, pending.smooth)) { setPending(null); return; }
+    if (kind) setKind(null); else setPending(null);
+  }, [pending, years, kind, flash, setKind]);
+
+  const jumpLatest = () => { if (latest) setPending({ id: latest.id, smooth: true }); };
 
   return (
     <div className="page wide browse" ref={rootRef}>
       <h1>Events</h1>
       <p className="sub">
-        {nights.length} nights, {newestFirst ? "newest" : "oldest"} first.
+        {plural(nights.length, "night")}, {newestFirst ? "newest" : "oldest"} first.
       </p>
 
       <div className="bbar">
@@ -193,7 +203,8 @@ export default function EventsList({ cat, weather, focusId, onOpenNight }: {
           ))}
         </div>
         <span className="spacer" />
-        <button className="fchip" onClick={jumpLatest}>Latest night ↓</button>
+        <button className="fchip" onClick={jumpLatest} disabled={!latest}
+          title="Scroll to the most recent night">Jump to latest night</button>
         <div className="segtoggle" role="group" aria-label="Sort">
           <button aria-pressed={newestFirst} onClick={() => setNewestFirst(true)}>Newest first</button>
           <button aria-pressed={!newestFirst} onClick={() => setNewestFirst(false)}>Oldest first</button>
@@ -202,11 +213,18 @@ export default function EventsList({ cat, weather, focusId, onOpenNight }: {
 
       <div className="bgrid">
         <div className="bmain">
+          {years.length === 0 && (
+            <div className="empty">
+              <div className="big" aria-hidden="true">◌</div>
+              <div>No nights to show{kind ? <> for “{kind}”.</> : "."}</div>
+              {kind && <div className="emptyacts"><button className="dr-btn ghost" onClick={() => setKind(null)}>Show all nights</button></div>}
+            </div>
+          )}
           {years.map(({ year, evs }) => (
             <section key={year} className="yeargroup" data-year={year}>
               <h2 className="yearhead">
                 <span className="yh-year">{year}</span>
-                <span className="yh-count">{evs.length} night{evs.length === 1 ? "" : "s"}</span>
+                <span className="yh-count">{plural(evs.length, "night")}</span>
               </h2>
               <div className="ngrid">
                 {evs.map((e) => (
@@ -237,7 +255,7 @@ export default function EventsList({ cat, weather, focusId, onOpenNight }: {
             {shelves.map((e) => (
               <button key={e.id} className="card" onClick={() => onOpenNight(e.id)}>
                 <div className="k">{e.folder}</div>
-                <div className="n">{e.playedCount} tracks</div>
+                <div className="n">{plural(e.playedCount, "track")}</div>
               </button>
             ))}
           </div>
@@ -253,7 +271,7 @@ export default function EventsList({ cat, weather, focusId, onOpenNight }: {
               {p.name}
             </div>
             <div className="n">
-              {p.trackCount} tracks · {p.eventCount} events
+              {plural(p.trackCount, "track")} · {plural(p.eventCount, "night")}
               {p.aliases.length ? ` · aka ${p.aliases.join(", ")}` : ""}
             </div>
           </div>

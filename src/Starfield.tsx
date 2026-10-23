@@ -23,8 +23,19 @@ const pick = <T,>(xs: T[]): T => xs[Math.floor(Math.random() * xs.length)];
 /** Violet, magenta, cyan, teal, amber -- amber sparingly, as a warm accent. */
 const HUES = [264, 296, 326, 190, 166, 34];
 const PIXEL = 3;
+/** Twinkle brightness is bucketed so every star colour is a string built once, not per frame. */
+const LEVELS = 24;
+const LAYER_ALPHA = [0.45, 0.67, 0.89];       // white stars, by depth
+const LAYER_ALPHA_HUED = [0.55, 0.75, 0.95];  // coloured stars
+/** Minimum ms between painted frames: caps a 144 Hz display at about 80 fps. */
+const GAP_FULL = 12;
+/** ...and on a machine that cannot keep up, about 30 fps. */
+const GAP_WEAK = 32;
+const RIBBON_ALPHA = [0.042, 0.068, 0.105];
+const RIBBON_WIDTH = [92, 50, 18];
 
-interface Star { x: number; y: number; layer: 0 | 1 | 2; size: number; phase: number; hue: number }
+/** `hi` indexes HUES, or -1 for the common cool-white star. */
+interface Star { x: number; y: number; layer: 0 | 1 | 2; size: number; phase: number; hi: number }
 interface Blob { sprite: number; x: number; y: number; size: number; speed: number; phase: number; bob: number }
 interface Spore { sprite: number; x: number; y: number; size: number; speed: number; phase: number; bob: number }
 interface Ring { x: number; y: number; born: number; hue: number; reach: number; life: number }
@@ -61,7 +72,17 @@ export default function Starfield() {
     const nebula = HUES.map((h) => makeGlow(h, 256, 0.9));
     const orb = HUES.map((h) => makeGlow(h, 64, 1));
 
-    let w = 0, h = 0, dpr = 1;
+    // Colour strings for the stars, built once: [hue index + 1][layer][level].
+    const starStyle: string[][][] = [-1, ...HUES.keys()].map((hi) =>
+      [0, 1, 2].map((layer) => Array.from({ length: LEVELS + 1 }, (_, lv) => {
+        const tw = lv / LEVELS;
+        return hi < 0
+          ? `rgba(236, 230, 255, ${tw * LAYER_ALPHA[layer]})`
+          : `hsla(${HUES[hi]}, 100%, 78%, ${tw * LAYER_ALPHA_HUED[layer]})`;
+      })));
+    const whiteStyle = Array.from({ length: LEVELS + 1 }, (_, lv) => `rgba(255, 255, 255, ${lv / LEVELS})`);
+
+    let w = 0, h = 0, dpr = 1, dprCap = 1.5;
     let stars: Star[] = [];
     let blobs: Blob[] = [];
     let spores: Spore[] = [];
@@ -74,11 +95,12 @@ export default function Starfield() {
     let last = 0;
     let clock = 0;                 // seconds since start, advanced by dt
     let nextRing = 4, nextComet = 2.2, nextStreak = 0.9, nextShower = 18;
-    let lite = false;              // flips on if frames get expensive
+    let lite = false;              // flips on if frames get expensive (and back off, with hysteresis)
+    let minGap = GAP_FULL;
     let workMs = 0, frames = 0;
 
     function build() {
-      dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      dpr = Math.min(window.devicePixelRatio || 1, dprCap);
       w = canvas!.clientWidth;
       h = canvas!.clientHeight;
       canvas!.width = Math.floor(w * dpr);
@@ -99,7 +121,7 @@ export default function Starfield() {
           x: Math.random() * w, y: Math.random() * h, layer,
           size: layer === 0 ? rand(0.6, 1.2) : layer === 1 ? rand(1, 1.8) : rand(1.5, 2.6),
           phase: Math.random() * TAU,
-          hue: Math.random() < 0.18 ? pick(HUES) : 255,
+          hi: Math.random() < 0.18 ? Math.floor(Math.random() * HUES.length) : -1,
         };
       });
 
@@ -146,30 +168,31 @@ export default function Starfield() {
         const amp = 34 + i * 16;
         const hue = (clock * 7 + i * 83) % 360;
         const scroll = clock * (22 + i * 9);            // waves travel left
-        const pts: [number, number][] = [];
+        // One path and one gradient per ribbon, stroked once per glow pass; the
+        // pass's strength rides on globalAlpha, which composes exactly like a
+        // gradient whose stops carry the alpha.
+        const path = new Path2D();
         for (let x = -30; x <= w + 30; x += 22) {
           const u = x + scroll;
           const y = base
             + Math.sin(u * 0.0048 + i * 1.9) * amp
             + Math.sin(u * 0.0013 - clock * 0.2 + i) * amp * 1.5
             + Math.sin(u * 0.011 + clock * 0.5) * amp * 0.12;
-          pts.push([x, y]);
+          if (x === -30) path.moveTo(x, y); else path.lineTo(x, y);
         }
+        const grad = ctx!.createLinearGradient(0, 0, w, 0);
+        grad.addColorStop(0, `hsl(${hue}, 92%, 60%)`);
+        grad.addColorStop(0.33, `hsl(${hue + 60}, 92%, 62%)`);
+        grad.addColorStop(0.66, `hsl(${hue + 130}, 92%, 62%)`);
+        grad.addColorStop(1, `hsl(${hue + 200}, 92%, 60%)`);
+        ctx!.strokeStyle = grad;
         for (let p = 0; p < passes; p++) {
-          const grad = ctx!.createLinearGradient(0, 0, w, 0);
-          const a = [0.042, 0.068, 0.105][p];
-          grad.addColorStop(0, `hsla(${hue}, 92%, 60%, ${a})`);
-          grad.addColorStop(0.33, `hsla(${hue + 60}, 92%, 62%, ${a})`);
-          grad.addColorStop(0.66, `hsla(${hue + 130}, 92%, 62%, ${a})`);
-          grad.addColorStop(1, `hsla(${hue + 200}, 92%, 60%, ${a})`);
-          ctx!.strokeStyle = grad;
-          ctx!.lineWidth = [92, 50, 18][p] - i * 6;
-          ctx!.beginPath();
-          ctx!.moveTo(pts[0][0], pts[0][1]);
-          for (let k = 1; k < pts.length; k++) ctx!.lineTo(pts[k][0], pts[k][1]);
-          ctx!.stroke();
+          ctx!.globalAlpha = RIBBON_ALPHA[p];
+          ctx!.lineWidth = RIBBON_WIDTH[p] - i * 6;
+          ctx!.stroke(path);
         }
       }
+      ctx!.globalAlpha = 1;
     }
 
     function drawStars(dt: number) {
@@ -182,10 +205,8 @@ export default function Starfield() {
         if (s.x < -6) { s.x = w + 6; s.y = Math.random() * h; }
         const tw = 0.55 + 0.45 * Math.sin(clock * (0.9 + s.layer * 0.7) + s.phase);
         const y = s.y + Math.sin(clock * 0.25 + s.phase) * (1 + s.layer * 1.6);
-        const light = s.hue === 255 ? "236, 230, 255" : null;
-        ctx!.fillStyle = light
-          ? `rgba(${light}, ${tw * (0.45 + s.layer * 0.22)})`
-          : `hsla(${s.hue}, 100%, 78%, ${tw * (0.55 + s.layer * 0.2)})`;
+        const lv = Math.round(tw * LEVELS);
+        ctx!.fillStyle = starStyle[s.hi + 1][s.layer][lv];
         if (s.layer === 0) {
           ctx!.fillRect(s.x, y, s.size, s.size);
         } else {
@@ -193,7 +214,7 @@ export default function Starfield() {
           const len = s.layer === 1 ? 5 : 13;
           ctx!.fillRect(s.x, y, s.size + len, Math.max(s.size * 0.7, 1));
           if (s.layer === 2) {
-            ctx!.fillStyle = `rgba(255, 255, 255, ${tw})`;
+            ctx!.fillStyle = whiteStyle[lv];
             ctx!.fillRect(s.x, y - 0.2, s.size * 1.2, s.size);
           }
         }
@@ -357,8 +378,10 @@ export default function Starfield() {
 
     function frame(now: number) {
       raf = requestAnimationFrame(frame);
+      const gap = last ? now - last : 16;
+      if (last && gap < minGap) return;       // a faster display does not get a faster sky
       const t0 = performance.now();
-      const dt = Math.min(0.05, last ? (now - last) / 1000 : 0.016);
+      const dt = Math.min(0.05, gap / 1000);
       last = now;
       clock += dt;
 
@@ -376,7 +399,14 @@ export default function Starfield() {
       if (++frames === 60) {
         const avg = workMs / frames;
         canvas!.dataset.frameMs = avg.toFixed(2);
-        lite = avg > 11;
+        // Hysteresis: thin the layers above 11 ms, restore them only well below
+        // it, so the guard cannot flip every second.
+        if (!lite && avg > 11) lite = true;
+        else if (lite && avg < 6.5) lite = false;
+        if (avg > 18) {
+          minGap = GAP_WEAK;                                  // really weak: about 30 fps...
+          if (dprCap > 1) { dprCap = 1; build(); }            // ...at 1x pixels
+        } else if (avg < 9) minGap = GAP_FULL;
         workMs = 0; frames = 0;
       }
     }
@@ -388,7 +418,17 @@ export default function Starfield() {
       w: () => w, h: () => h,
     });
     if (reduced) skyEvents.disable();
-    const onResize = () => { build(); if (reduced) paint(0); };
+    // Rebuilding re-rolls every star, so wait for the resize to settle and only
+    // act if the size really changed.
+    let resizeTimer = 0;
+    const onResize = () => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        if (canvas.clientWidth === w && canvas.clientHeight === h) return;
+        build();
+        if (reduced) paint(0);
+      }, 120);
+    };
     window.addEventListener("resize", onResize);
 
     if (reduced) {
@@ -401,6 +441,7 @@ export default function Starfield() {
 
     return () => {
       cancelAnimationFrame(raf);
+      window.clearTimeout(resizeTimer);
       skyEvents.dispose();
       window.removeEventListener("resize", onResize);
     };

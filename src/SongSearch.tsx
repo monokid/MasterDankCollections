@@ -4,259 +4,385 @@
  *  row that says "8 nights"; click it and each play unfolds beneath, one line
  *  per night. The filters ask the questions this library is actually asked:
  *  whose, when, and what kind of night.
+ *
+ *  Keyboard: "/" (from anywhere) focuses the box, Down moves into the results,
+ *  Up/Down walk them, Enter opens, Esc clears. Filters, the query, the open
+ *  song and the scroll position are remembered while you look at a track and
+ *  come back. The list grows as you scroll and rows off-screen are skipped by
+ *  the browser (content-visibility), so ~3,000 songs cost about 100.
  */
-import { useMemo, useState } from "react";
+import {
+  memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState,
+  type KeyboardEvent,
+} from "react";
 import type { Catalog, Track } from "./catalog.ts";
 import type { Trace } from "./Timeline.tsx";
-import { buildIndex, search, highlight } from "./search.ts";
+import { buildIndex, search } from "./search.ts";
 import { isShown } from "./config.ts";
+import { Marked } from "./rows.tsx";
+import { fmtCount, fmtDate, fmtDur, plural } from "./format.ts";
+import {
+  copyText, groupHits, lookups, scrollRootOf, SORT_LABEL, sortGroups, stepIndex,
+  type Group, type Lookups, type SortKey,
+} from "./pagehelpers.ts";
+import { useOnChange, useSessionState } from "./hooks.ts";
+import {
+  consumeFocusRequest, FOCUS_SEARCH_EVENT, getSearchQuery, setSearchQuery, subscribeSearchQuery,
+} from "./events.ts";
+import { useToast } from "./Toast.tsx";
+import { CloseIcon, CopyIcon, SearchIcon } from "./icons.tsx";
+import "./pages.css";
 
-const MAX_GROUPS = 200;
+const BATCH = 120;   // rows added each time the list grows
 
-interface Group {
-  key: string;
-  songId: string | null;
-  title: string;
-  artist: string | null;
-  variants: string[];
-  tracks: Track[];            // every play that survived the filters
-  nights: number;
-}
+/** What survives leaving the page for a track and coming back (not a reload). */
+const memo_ = { scroll: 0, open: null as string | null, limit: BATCH };
 
-const fmtDur = (s: number | null) => {
-  if (!s) return "";
-  return `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
-};
-
-const fmtDate = (d: string | null | undefined) =>
-  d ? new Date(d + "T00:00:00").toLocaleDateString(undefined,
-    { year: "numeric", month: "short", day: "numeric" }) : "undated";
-
-function Marked({ value, query }: { value: string; query: string }) {
-  if (!query.trim()) return <>{value}</>;
+const GroupRow = memo(function GroupRow({ g, isOpen, q, lk, onToggle, onOpen, onTrace }: {
+  g: Group; isOpen: boolean; q: string; lk: Lookups;
+  onToggle: (g: Group) => void; onOpen: (t: Track) => void; onTrace: (t: Trace) => void;
+}) {
+  const solo = g.tracks.length === 1;
   return (
-    <>{highlight(value, query).map(([part, hit], i) =>
-      hit ? <mark key={i}>{part}</mark> : <span key={i}>{part}</span>)}</>
-  );
-}
+    <div className={`songgroup${isOpen ? " open" : ""}`}>
+      <button className="row" aria-expanded={solo ? undefined : isOpen}
+        title={solo ? "Open this track" : isOpen ? "Hide the nights" : "Show every night it was played"}
+        onClick={() => onToggle(g)}>
+        <div className="t">
+          <Marked value={g.title} query={q} />
+          {g.variants.slice(0, 2).map((v) => (
+            <span key={v} className="chip variant">{v}</span>
+          ))}
+          {g.nights > 1 && (
+            <span className="chip recurs" title={`Played on ${g.nights} nights`}>
+              {g.nights} nights
+            </span>
+          )}
+          {g.anon && <span className="chip anon">anon</span>}
+        </div>
+        <div className="a"><Marked value={g.artist ?? "—"} query={q} /></div>
+        <div className="p">
+          {g.people.length
+            ? g.people.slice(0, 2).join(", ") + (g.people.length > 2 ? ` +${g.people.length - 2}` : "")
+            : <span className="faint">unknown</span>}
+        </div>
+        <div className="d">{g.span}</div>
+      </button>
 
-export default function SongSearch({ cat, onOpen, onTrace }: {
+      {isOpen && (
+        <div className="plays">
+          {g.tracks.map((t) => {
+            const ev = lk.events.get(t.eventId);
+            const person = t.personId ? lk.peopleName.get(t.personId) : null;
+            return (
+              <button key={t.id} className="play" onClick={() => onOpen(t)}>
+                <span className="when">{ev?.kind === "collection" ? "collection" : fmtDate(ev?.date)}</span>
+                <span className="what">{ev?.title || ev?.types.join(" + ") || ev?.folder}</span>
+                <span className="who">{person ?? "unknown"}</span>
+                <span className="len">{fmtDur(t.durationSec)}</span>
+              </button>
+            );
+          })}
+          {g.songId && g.nights > 1 && (
+            <button className="play trace" onClick={() => {
+              const s = lk.songs.get(g.songId!);
+              if (s) onTrace({
+                kind: "song", id: s.id, label: `${s.artist} — ${s.title}`,
+                nights: new Set(s.nights),
+              });
+            }}>
+              show these nights on the timeline →
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
+
+export default function SongSearch({ cat, onOpen, onTrace, initialQuery, onQueryChange }: {
   cat: Catalog;
   onOpen: (t: Track) => void;
   onTrace: (t: Trace) => void;
+  /** Optional extra way in for a query from the URL (#/search?q=..). The shared
+   *  store in events.ts does the same job; Search works with neither. */
+  initialQuery?: string;
+  /** Optional: called with the new text whenever the box changes. */
+  onQueryChange?: (q: string) => void;
 }) {
-  const [query, setQuery] = useState("");
-  const [includeAnon, setIncludeAnon] = useState(false);
-  const [personId, setPersonId] = useState("");
-  const [year, setYear] = useState("");
-  const [type, setType] = useState("");
-  const [open, setOpen] = useState<string | null>(null);
+  const [query, setQueryRaw] = useSessionState("search.q", "");
+  const [includeAnon, setIncludeAnon] = useSessionState("search.anon", false);
+  const [personId, setPersonId] = useSessionState("search.person", "");
+  const [year, setYear] = useSessionState("search.year", "");
+  const [type, setType] = useSessionState("search.type", "");
+  const [sortPref, setSortPref] = useSessionState<SortKey | "auto">("search.sort", "auto");
+  const [open, setOpenRaw] = useState<string | null>(memo_.open);
+  const [limit, setLimitRaw] = useState(memo_.limit);
+
+  const setOpen = useCallback((k: string | null) => { memo_.open = k; setOpenRaw(k); }, []);
+  const setLimit = useCallback((f: (n: number) => number) => {
+    setLimitRaw((n) => { const v = f(n); memo_.limit = v; return v; });
+  }, []);
+
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLDivElement>(null);
+  const emitted = useRef<string | null>(null);
+  const { toast, node: toastNode } = useToast();
+
+  const setQuery = useCallback((v: string) => {
+    setQueryRaw(v);
+    emitted.current = v;
+    setSearchQuery(v);          // the shell mirrors this into the URL
+    onQueryChange?.(v);
+  }, [setQueryRaw, onQueryChange]);
+
+  // The URL is the other way in: adopt a query that did not come from this box
+  // (a pasted link, browser back). An empty one on arrival must not wipe the
+  // query being remembered; the remembered one is handed to the shell instead.
+  const seen = useRef("");
+  seen.current = query;
+  useEffect(() => {
+    const arriving = initialQuery ?? getSearchQuery();
+    if (arriving && arriving !== seen.current) { setQueryRaw(arriving); setOpen(null); }
+    else if (!arriving && seen.current) setSearchQuery(seen.current);
+    return subscribeSearchQuery((q) => {
+      if (q === emitted.current || q === seen.current) return;
+      setQueryRaw(q); setOpen(null);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (initialQuery !== undefined && initialQuery !== emitted.current && initialQuery !== seen.current) {
+      setQueryRaw(initialQuery); setOpen(null);
+    }
+  }, [initialQuery, setQueryRaw, setOpen]);
+
+  // "/" anywhere focuses the box.
+  useEffect(() => {
+    const focus = () => {
+      consumeFocusRequest();
+      inputRef.current?.focus(); inputRef.current?.select();
+    };
+    window.addEventListener(FOCUS_SEARCH_EVENT, focus);
+    return () => window.removeEventListener(FOCUS_SEARCH_EVENT, focus);
+  }, []);
+
+  // Coming back from a track: land where we were. Otherwise focus the box
+  // (without scrolling, which would undo the restore).
+  useLayoutEffect(() => {
+    const root = scrollRootOf(inputRef.current);
+    if (consumeFocusRequest()) { inputRef.current?.focus(); inputRef.current?.select(); }
+    else if (root && memo_.scroll > 0) root.scrollTop = memo_.scroll;
+    else inputRef.current?.focus({ preventScroll: true });
+    if (!root) return;
+    const onScroll = () => { memo_.scroll = root.scrollTop; };
+    root.addEventListener("scroll", onScroll, { passive: true });
+    return () => root.removeEventListener("scroll", onScroll);
+  }, []);
 
   const index = useMemo(() => buildIndex(cat), [cat]);
-  const events = useMemo(() => new Map(cat.events.map((e) => [e.id, e])), [cat]);
-  const songs = useMemo(() => new Map(cat.songs.map((s) => [s.id, s])), [cat]);
-  const peopleName = useMemo(
-    () => new Map(cat.people.map((p) => [p.id, p.name])), [cat]);
+  const lk = useMemo(() => lookups(cat), [cat]);
 
   const years = useMemo(() => [...new Set(
     cat.events.filter((e) => isShown(e) && e.date)
       .map((e) => e.date!.slice(0, 4)))].sort(), [cat]);
   const types = useMemo(() => [...new Set(
-    cat.events.flatMap((e) => e.types))].sort(), [cat]);
+    cat.events.filter(isShown).flatMap((e) => e.types))].sort(), [cat]);
+  const range = useMemo(() => {
+    const ys = years;
+    return ys.length ? `${ys[0]}–${ys[ys.length - 1]}` : "";
+  }, [years]);
+  const nightCount = useMemo(() => cat.events.filter(isShown).length, [cat]);
 
-  const q = query.trim();
+  // Typing stays instant; the 3,000-song regroup happens at lower priority.
+  const dq = useDeferredValue(query);
+  const q = dq.trim();
+  const stale = dq !== query;
 
-  const { groups, plays } = useMemo(() => {
+  const { groups: raw, plays } = useMemo(() => {
     // Searching ranks tracks; an empty query takes everything, so the landing
     // page can lead with what the library plays most.
-    const hits = search(index, query, {
+    const hits = search(index, dq, {
       includeAnon, personId: personId || null, limit: q ? 3000 : 20000,
     });
-    const by = new Map<string, Group>();
-    let count = 0;
-    for (const h of hits) {
-      const t = h.track;
-      const ev = events.get(t.eventId);
-      if (year && ev?.date?.slice(0, 4) !== year) continue;
-      if (type && !ev?.types.includes(type)) continue;
-      count++;
-      const key = t.songId ?? `t:${t.id}`;
-      let g = by.get(key);
-      if (!g) {
-        const song = t.songId ? songs.get(t.songId) : undefined;
-        g = {
-          key, songId: t.songId,
-          title: song?.title ?? t.title ?? "(untitled)",
-          artist: song?.artist ?? t.artist,
-          variants: song?.variants ?? [],
-          tracks: [], nights: 0,
-        };
-        by.set(key, g);
-      }
-      g.tracks.push(t);
-    }
-    const list = [...by.values()];
-    for (const g of list) {
-      g.nights = new Set(g.tracks.map((t) => t.eventId)).size;
-      // Newest play first: that is the one people are usually after.
-      g.tracks.sort((a, b) =>
-        (events.get(b.eventId)?.date ?? "").localeCompare(events.get(a.eventId)?.date ?? ""));
-    }
-    // Searching keeps the ranking the scorer gave (insertion order is rank
-    // order). With no query, the canon leads.
-    if (!q) list.sort((a, b) => b.nights - a.nights || b.tracks.length - a.tracks.length);
-    return { groups: list, plays: count };
-  }, [index, query, q, includeAnon, personId, year, type, events, songs]);
+    return groupHits(hits, lk, { year, type });
+  }, [index, dq, q, includeAnon, personId, year, type, lk]);
 
-  const shown = groups.slice(0, MAX_GROUPS);
+  const sort: SortKey = sortPref === "auto" || (sortPref === "match" && !q)
+    ? (q ? "match" : "nights") : sortPref;
+  const groups = useMemo(() => sortGroups(raw, sort, !!q), [raw, sort, q]);
+  const shown = useMemo(() => groups.slice(0, limit), [groups, limit]);
   const filtered = !!(personId || year || type);
+
+  // A new question starts at the top with nothing unfolded.
+  useOnChange([dq, includeAnon, personId, year, type, sort].join("|"), () => {
+    setOpen(null);
+    setLimit(() => BATCH);
+    scrollRootOf(inputRef.current)?.scrollTo({ top: 0, behavior: "instant" });
+  });
+
+  // Grow the list when its end comes near.
+  useEffect(() => {
+    const el = moreRef.current;
+    if (!el || shown.length >= groups.length || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver((es) => {
+      if (es.some((e) => e.isIntersecting)) setLimit((n) => n + BATCH);
+    }, { rootMargin: "600px 0px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [shown.length, groups.length, setLimit]);
+
+  const toggle = useCallback((g: Group) => {
+    if (g.tracks.length === 1) onOpen(g.tracks[0]);
+    else setOpen(memo_.open === g.key ? null : g.key);
+  }, [onOpen, setOpen]);
+
+  const clearFilters = () => { setPersonId(""); setYear(""); setType(""); };
+
+  const onInputKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") {
+      const first = listRef.current?.querySelector<HTMLElement>("button.row");
+      if (first) { e.preventDefault(); first.focus(); }
+    } else if (e.key === "Enter") {
+      if (shown[0]) { e.preventDefault(); toggle(shown[0]); }
+    } else if (e.key === "Escape") {
+      if (query) { e.preventDefault(); setQuery(""); }
+      else inputRef.current?.blur();
+    }
+  };
+
+  // Up/Down walk the rows (and any unfolded nights) with real focus, so Enter
+  // and screen readers work without a second, invisible cursor.
+  const onListKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") { e.preventDefault(); inputRef.current?.focus(); return; }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const items = [...(listRef.current?.querySelectorAll<HTMLElement>("button.row, button.play") ?? [])];
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    if (at < 0) return;
+    e.preventDefault();
+    const to = stepIndex(at, e.key === "ArrowDown" ? 1 : -1, items.length);
+    if (to < 0) inputRef.current?.focus();
+    else {
+      items[to].focus();
+      if (to === items.length - 1 && shown.length < groups.length) setLimit((n) => n + BATCH);
+    }
+  };
+
+  const copyLink = async () => {
+    toast((await copyText(window.location.href)) ? "Link to this search copied" : "Could not copy the link");
+  };
+
+  const sortOptions: SortKey[] = ["match", "nights", "az", "newest"];
 
   return (
     <div className="page">
       <h1>Search the collection</h1>
       <p className="sub">
-        {cat.stats.songs.toLocaleString()} songs · {cat.stats.artists.toLocaleString()} artists ·
-        {" "}{cat.events.filter(isShown).length} nights spanning{" "}
-        {cat.events.find((e) => e.date)?.date?.slice(0, 4)}–
-        {cat.events.filter((e) => e.date).slice(-1)[0]?.date?.slice(0, 4)}
+        {fmtCount(cat.stats.songs)} songs · {fmtCount(cat.stats.artists)} artists ·
+        {" "}{fmtCount(nightCount)} nights{range && <> spanning {range}</>}
       </p>
 
-      <div className="searchwrap">
-        <span className="searchicon">⌕</span>
-        <input
-          className="searchbox"
-          placeholder="Song, artist, album, person or event…"
-          value={query}
-          onChange={(e) => { setQuery(e.target.value); setOpen(null); }}
-          autoFocus
-          spellCheck={false}
-        />
-      </div>
+      <div className="sstick">
+        <div className="searchwrap">
+          <span className="searchicon" aria-hidden="true"><SearchIcon size={19} /></span>
+          <input
+            ref={inputRef}
+            className="searchbox"
+            type="text"
+            aria-label="Search songs, artists, albums, people or events"
+            aria-keyshortcuts="/"
+            placeholder="Song, artist, album, person or event…   ( / to focus )"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={onInputKey}
+            spellCheck={false}
+            autoComplete="off"
+          />
+          {query && (
+            <button className="searchclear" aria-label="Clear search" title="Clear (Esc)"
+              onClick={() => { setQuery(""); inputRef.current?.focus(); }}>
+              <CloseIcon size={15} />
+            </button>
+          )}
+        </div>
 
-      <div className="filters">
-        <select aria-label="Brought by" value={personId}
-          onChange={(e) => { setPersonId(e.target.value); setOpen(null); }}>
-          <option value="">Anyone</option>
-          {cat.people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
-        <select aria-label="Year" value={year}
-          onChange={(e) => { setYear(e.target.value); setOpen(null); }}>
-          <option value="">Any year</option>
-          {years.map((y) => <option key={y} value={y}>{y}</option>)}
-        </select>
-        <select aria-label="Kind of night" value={type}
-          onChange={(e) => { setType(e.target.value); setOpen(null); }}>
-          <option value="">Any night</option>
-          {types.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
-        {filtered && (
-          <button className="tl-clear" style={{ marginLeft: 0 }}
-            onClick={() => { setPersonId(""); setYear(""); setType(""); setOpen(null); }}>
-            clear filters
-          </button>
-        )}
-        <label>
-          <input type="checkbox" checked={includeAnon}
-            onChange={(e) => setIncludeAnon(e.target.checked)} />
-          Include anonymised ({cat.stats.anonTracks})
-        </label>
-        <span style={{ marginLeft: "auto" }}>
-          {q || filtered
-            ? `${groups.length}${groups.length > MAX_GROUPS ? "" : ""} song${groups.length === 1 ? "" : "s"} · ${plays} play${plays === 1 ? "" : "s"}`
-            : "most played first · start typing to search"}
-        </span>
+        <div className="filters">
+          <select aria-label="Brought by" value={personId}
+            onChange={(e) => setPersonId(e.target.value)}>
+            <option value="">Anyone</option>
+            {cat.people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <select aria-label="Year" value={year} onChange={(e) => setYear(e.target.value)}>
+            <option value="">Any year</option>
+            {years.map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+          <select aria-label="Kind of night" value={type} onChange={(e) => setType(e.target.value)}>
+            <option value="">Any kind of night</option>
+            {types.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select aria-label="Sort by" value={sort}
+            onChange={(e) => setSortPref(e.target.value as SortKey)}>
+            {sortOptions.map((s) => (
+              <option key={s} value={s} disabled={s === "match" && !q}>{SORT_LABEL[s]}</option>
+            ))}
+          </select>
+          {filtered && (
+            <button className="tl-clear nomargin" onClick={clearFilters}>clear filters</button>
+          )}
+          <label>
+            <input type="checkbox" checked={includeAnon}
+              onChange={(e) => setIncludeAnon(e.target.checked)} />
+            Include anonymised ({fmtCount(cat.stats.anonTracks)})
+          </label>
+          <span className="rcount" aria-live="polite">
+            {plural(groups.filter((g) => g.songId).length, "song")}
+            {groups.some((g) => !g.songId) && ` + ${fmtCount(groups.filter((g) => !g.songId).length)} without an artist`}
+            {" · "}{plural(plays, "play")}
+            {!q && !filtered && ` · ${SORT_LABEL[sort].toLowerCase()} first`}
+            {q && (
+              <button className="linkbtn" onClick={() => void copyLink()} title="Copy a link to this search">
+                <CopyIcon size={13} /> copy link
+              </button>
+            )}
+          </span>
+        </div>
       </div>
 
       {groups.length === 0 ? (
         <div className="empty">
-          <div className="big">◌</div>
-          <div>{q ? <>Nothing matches “{q}”.</> : "Nothing matches those filters."}</div>
-          {!includeAnon && cat.stats.anonTracks > 0 && (
-            <div style={{ marginTop: 8, fontSize: 13 }}>
-              {cat.stats.anonTracks} anonymised tracks are hidden — try enabling them.
-            </div>
-          )}
+          <div className="big" aria-hidden="true">◌</div>
+          <div>
+            {q
+              ? <>No song or artist matches “{q}”. Try fewer words, or a different spelling.</>
+              : "Nothing matches those filters."}
+          </div>
+          <div className="emptyacts">
+            {q && <button className="dr-btn ghost" onClick={() => setQuery("")}>Clear search</button>}
+            {filtered && <button className="dr-btn ghost" onClick={clearFilters}>Clear filters</button>}
+            {!includeAnon && cat.stats.anonTracks > 0 && (
+              <button className="dr-btn ghost" onClick={() => setIncludeAnon(true)}>
+                Include {fmtCount(cat.stats.anonTracks)} anonymised tracks
+              </button>
+            )}
+          </div>
         </div>
       ) : (
-        <div className="rows">
-          {shown.map((g) => {
-            const isOpen = open === g.key;
-            const people = [...new Set(g.tracks.map((t) => t.personId).filter(Boolean))]
-              .map((id) => peopleName.get(id!) ?? "").filter(Boolean);
-            const dates = g.tracks.map((t) => events.get(t.eventId)?.date).filter(Boolean) as string[];
-            dates.sort();
-            const span = dates.length
-              ? (dates[0].slice(0, 4) === dates[dates.length - 1].slice(0, 4)
-                ? dates[0].slice(0, 4)
-                : `${dates[0].slice(0, 4)}–${dates[dates.length - 1].slice(2, 4)}`)
-              : "";
-            const solo = g.tracks.length === 1;
-            return (
-              <div key={g.key} className={`songgroup${isOpen ? " open" : ""}`}>
-                <button className="row" aria-expanded={isOpen}
-                  onClick={() => solo ? onOpen(g.tracks[0]) : setOpen(isOpen ? null : g.key)}>
-                  <div className="t">
-                    <Marked value={g.title} query={q} />
-                    {g.variants.slice(0, 2).map((v) => (
-                      <span key={v} className="chip variant">{v}</span>
-                    ))}
-                    {g.nights > 1 && (
-                      <span className="chip recurs" title={`Played on ${g.nights} nights`}>
-                        {g.nights} nights
-                      </span>
-                    )}
-                    {g.tracks.some((t) => t.flags.includes("anon")) && (
-                      <span className="chip anon">anon</span>
-                    )}
-                  </div>
-                  <div className="a"><Marked value={g.artist ?? "—"} query={q} /></div>
-                  <div className="p">
-                    {people.length
-                      ? people.slice(0, 2).join(", ") + (people.length > 2 ? ` +${people.length - 2}` : "")
-                      : <span style={{ opacity: 0.45 }}>unknown</span>}
-                  </div>
-                  <div className="d">{span}</div>
-                </button>
-
-                {isOpen && (
-                  <div className="plays">
-                    {g.tracks.map((t) => {
-                      const ev = events.get(t.eventId);
-                      const person = t.personId ? peopleName.get(t.personId) : null;
-                      return (
-                        <button key={t.id} className="play" onClick={() => onOpen(t)}>
-                          <span className="when">{ev?.kind === "collection" ? "collection" : fmtDate(ev?.date)}</span>
-                          <span className="what">
-                            {ev?.title || ev?.types.join(" + ") || ev?.folder}
-                          </span>
-                          <span className="who">{person ?? "unknown"}</span>
-                          <span className="len">{fmtDur(t.durationSec)}</span>
-                        </button>
-                      );
-                    })}
-                    {g.songId && g.nights > 1 && (
-                      <button className="play trace" onClick={() => {
-                        const s = songs.get(g.songId!)!;
-                        onTrace({
-                          kind: "song", id: s.id, label: `${s.artist} — ${s.title}`,
-                          nights: new Set(s.nights),
-                        });
-                      }}>
-                        show these nights on the timeline →
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          {groups.length > MAX_GROUPS && (
-            <div className="empty" style={{ padding: "18px 0", fontSize: 13 }}>
-              Showing the first {MAX_GROUPS} of {groups.length} songs — narrow it with a filter.
+        <div className={`rows resultlist${stale ? " stale" : ""}`} ref={listRef} onKeyDown={onListKey}>
+          {shown.map((g) => (
+            <GroupRow key={g.key} g={g} isOpen={open === g.key} q={q} lk={lk}
+              onToggle={toggle} onOpen={onOpen} onTrace={onTrace} />
+          ))}
+          {shown.length < groups.length && (
+            <div className="more" ref={moreRef}>
+              <button className="dr-btn ghost" onClick={() => setLimit((n) => n + BATCH)}>
+                Show more · {fmtCount(groups.length - shown.length)} left
+              </button>
             </div>
           )}
         </div>
       )}
+      {toastNode}
     </div>
   );
 }

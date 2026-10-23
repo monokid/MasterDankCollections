@@ -11,6 +11,9 @@
  */
 import { useMemo, useState } from "react";
 import type { Catalog, SegmentRole } from "./catalog.ts";
+import { plural } from "./format.ts";
+import { copyText } from "./pagehelpers.ts";
+import "./pages.css";
 
 const ROLES: SegmentRole[] = ["person", "phase", "wrapper", "album", "ignore"];
 const STORAGE_KEY = "mdc-rules-draft";
@@ -90,12 +93,7 @@ export default function Resolver({ cat }: { cat: Catalog }) {
   }, null, 2), [draft]);
 
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(rulesJson);
-      setCopied(true);
-    } catch {
-      setCopied(false);
-    }
+    setCopied(await copyText(rulesJson));
   };
 
   return (
@@ -140,8 +138,7 @@ export default function Resolver({ cat }: { cat: Catalog }) {
             <div className={`panel q ${done ? "done" : ""}`} key={q.id}>
               <div className="subject">{seg?.name ?? q.subject}{done ? " ✓" : ""}</div>
               <div className="why">
-                Appears {q.occurrences} times across {q.events.length} event
-                {q.events.length === 1 ? "" : "s"}, and matches nothing the distiller
+                Appears {plural(q.occurrences, "time")} across {plural(q.events.length, "event")}, and matches nothing the distiller
                 recognises. What kind of folder is it?
               </div>
               <div className="examples">
@@ -205,7 +202,7 @@ export default function Resolver({ cat }: { cat: Catalog }) {
                     </td>
                     <td>{s.occurrences}</td>
                     <td>
-                      <select value={override ?? ""}
+                      <select value={override ?? ""} aria-label={`Override the role of ${s.name}`}
                         onChange={(e) => {
                           const v = e.target.value;
                           if (!v) {
@@ -229,12 +226,13 @@ export default function Resolver({ cat }: { cat: Catalog }) {
       )}
 
       <div className="exportbar">
-        <strong>{answered} answer{answered === 1 ? "" : "s"}</strong>
+        <strong>{plural(answered, "answer")}</strong>
         <span className="src">
-          {openCount} question{openCount === 1 ? "" : "s"} still open
+          {plural(openCount, "question")} still open
         </span>
         <span className="spacer" style={{ flex: 1 }} />
-        <button className="btn ghost" onClick={() => update(() => EMPTY)}>Reset</button>
+        <button className="btn ghost" disabled={answered === 0 && !Object.keys(draft.personAliases).length}
+          onClick={() => { if (window.confirm("Throw away every answer in this draft?")) update(() => EMPTY); }}>Reset</button>
         <button className="btn" onClick={copy}>
           {copied ? "Copied ✓" : "Copy rules.json"}
         </button>

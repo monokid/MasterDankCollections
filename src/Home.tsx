@@ -116,6 +116,8 @@ export default function Home({ onEnter, leaving: leavingProp }: {
   const origin = useRef<{ x: number; y: number } | null>(null);
   const touchTimer = useRef(0);
   const gateCtl = useRef<GateControl | null>(null);
+  const hostRect = useRef<DOMRect | null>(null);   // read once per resize, not on every pointer move
+  const closeTimer = useRef(0);
   const [gate, setGateState] = useState<"closed" | "open" | "closing">("closed");
   const gateRef = useRef(gate);
   const setGate = (g: "closed" | "open" | "closing") => { gateRef.current = g; setGateState(g); };
@@ -139,7 +141,18 @@ export default function Home({ onEnter, leaving: leavingProp }: {
       a.dispose(); amoeba.current = null; hook.phase = "gone";
       hook.enter = hook.open = hook.submit = null;
       window.clearTimeout(touchTimer.current);
+      window.clearTimeout(closeTimer.current);
     };
+  }, []);
+
+  // The host fills the viewport and only changes size on resize; its rect is
+  // cached so a pointer move never forces a layout (the hero's position is
+  // restyled every frame, which would make each read a fresh layout).
+  useLayoutEffect(() => {
+    const el = hostRef.current!;
+    const ro = new ResizeObserver(() => { hostRect.current = null; });
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
   // The teaser: aggregate numbers for the footer, and the contributors' shares for the creature.
@@ -164,7 +177,8 @@ export default function Home({ onEnter, leaving: leavingProp }: {
 
   /** Pointer and click positions, in the viewport's -1..1 space (y up). */
   const toLocal = (cx: number, cy: number) => {
-    const r = hostRef.current!.getBoundingClientRect();
+    // While leaving, the host is scaled by CSS; keep the rect from before.
+    const r = hostRect.current ??= hostRef.current!.getBoundingClientRect();
     return { x: ((cx - r.left) / r.width) * 2 - 1, y: -(((cy - r.top) / r.height) * 2 - 1) };
   };
 
@@ -178,7 +192,7 @@ export default function Home({ onEnter, leaving: leavingProp }: {
     amoeba.current?.surge(l.x, l.y);
     if (gateRef.current === "open") {
       setGate("closing");
-      window.setTimeout(() => setGate("closed"), 500);
+      closeTimer.current = window.setTimeout(() => setGate("closed"), 500);
     }
     onEnter(x, y);
   }, [onEnter]);
@@ -285,6 +299,7 @@ export default function Home({ onEnter, leaving: leavingProp }: {
       {gate !== "closed" && (
         <Gate attempt={attempt} closing={gate === "closing"} control={gateCtl}
           onClose={closeGate}
+          returnFocus={() => heroRef.current?.querySelector<HTMLElement>(".home-amoeba") ?? null}
           onSuccess={() => { const o = origin.current; const r = heroRef.current!.getBoundingClientRect(); proceed(o?.x ?? r.left + r.width / 2, o?.y ?? r.top + r.height / 2); }} />
       )}
     </section>

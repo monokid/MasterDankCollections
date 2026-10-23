@@ -5,10 +5,14 @@
  *  Each step is a click, with a back button, and every level can send you to
  *  the timeline with that thing lit up.
  */
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import type { Catalog } from "./catalog.ts";
 import type { Trace } from "./Timeline.tsx";
 import { discovery, inRange, playedOf, type Range } from "./analytics.ts";
+import { fmtDate, fmtHours, plural } from "./format.ts";
+import { lookups } from "./pagehelpers.ts";
+import { CloseIcon } from "./icons.tsx";
+import "./pages.css";
 
 export type Drill =
   | { kind: "song"; id: string }
@@ -23,6 +27,8 @@ interface Props {
   drill: Drill;
   range: Range | null;
   canBack: boolean;
+  /** Name of the level Back returns to ("Nightwish"), for the button's label. */
+  backLabel?: string;
   onBack: () => void;
   onClose: () => void;
   onDrill: (d: Drill) => void;
@@ -31,9 +37,28 @@ interface Props {
   onOpenNight: (id: string) => void;
 }
 
-const fmtDate = (d: string | null | undefined) =>
-  d ? new Date(d + "T00:00:00").toLocaleDateString(undefined,
-    { year: "numeric", month: "short", day: "numeric" }) : "undated";
+/** Every played track, once per catalogue: opening the panel used to rescan them all. */
+const playedCache = new WeakMap<Catalog, Catalog["tracks"]>();
+function allPlayed(cat: Catalog) {
+  let p = playedCache.get(cat);
+  if (!p) { p = playedOf(cat, null); playedCache.set(cat, p); }
+  return p;
+}
+
+const drillKey = (d: Drill) => JSON.stringify(d);
+
+/** A short name for a level, for the Back button ("Back to Nightwish"). */
+export function drillName(cat: Catalog, d: Drill): string {
+  const lk = lookups(cat);
+  switch (d.kind) {
+    case "song": return lk.songs.get(d.id)?.title ?? "song";
+    case "artist": return lk.artists.get(d.id)?.name ?? "artist";
+    case "person": return lk.people.get(d.id)?.name ?? "person";
+    case "year": return d.year;
+    case "night": return fmtDate(lk.events.get(d.id)?.date);
+    case "genre": return d.name;
+  }
+}
 
 function Spark({ values, labels }: { values: number[]; labels: string[] }) {
   const max = Math.max(...values, 1);
@@ -61,7 +86,33 @@ function Item({ label, sub, value, onClick }: {
 }
 
 export default function DrillPanel(props: Props) {
-  const { cat, drill, canBack, onBack, onClose } = props;
+  const { cat, drill, canBack, backLabel, onBack, onClose } = props;
+  const asideRef = useRef<HTMLElement>(null);
+  // Whatever had focus when the panel opened (the bar that was clicked) gets it back on close.
+  const trigger = useRef<Element | null>(typeof document === "undefined" ? null : document.activeElement);
+  const key = drillKey(drill);
+
+  // Focus moves into the panel on open and at each new level (the item that
+  // was clicked is gone by then, which would otherwise drop focus on the page).
+  useEffect(() => { asideRef.current?.focus({ preventScroll: true }); }, [key]);
+  useEffect(() => () => {
+    const t = trigger.current as HTMLElement | null;
+    if (t && t !== document.body && t.isConnected) t.focus({ preventScroll: true });
+  }, []);
+
+  // Esc closes, unless a field has the keyboard.
+  useEffect(() => {
+    const onKey = (k: KeyboardEvent) => {
+      if (k.key !== "Escape" || k.defaultPrevented) return;
+      const t = k.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName))) return;
+      k.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const ctx = useMemo(() => {
     const events = new Map(cat.events.map((e) => [e.id, e]));
     return {
@@ -69,7 +120,7 @@ export default function DrillPanel(props: Props) {
       people: new Map(cat.people.map((p) => [p.id, p])),
       songs: new Map(cat.songs.map((s) => [s.id, s])),
       artists: new Map(cat.artists.map((a) => [a.id, a])),
-      played: playedOf(cat, null),
+      played: allPlayed(cat),
     };
   }, [cat]);
 
@@ -116,15 +167,19 @@ export default function DrillPanel(props: Props) {
   }
 
   return (
-    <aside className="drill" aria-label="Drilldown">
+    <aside className="drill" aria-label={`Detail: ${head.kicker} ${head.title}`} ref={asideRef} tabIndex={-1}>
       <div className="dr-head">
-        {canBack && <button className="dr-back" onClick={onBack} aria-label="Back">←</button>}
+        {canBack && (
+          <button className="dr-back" onClick={onBack}
+            aria-label={backLabel ? `Back to ${backLabel}` : "Back"}
+            title={backLabel ? `Back to ${backLabel}` : "Back"}>←</button>
+        )}
         <div className="dr-titles">
           <div className="dr-kicker">{head.kicker}</div>
-          <div className="dr-title">{head.title}</div>
+          <div className="dr-title" role="heading" aria-level={2}>{head.title}</div>
           {head.sub && <div className="dr-sub">{head.sub}</div>}
         </div>
-        <button className="np-x" onClick={onClose} aria-label="Close">✕</button>
+        <button className="np-x" onClick={onClose} aria-label="Close (Esc)" title="Close (Esc)"><CloseIcon size={14} /></button>
       </div>
       <div className="dr-body">{body}</div>
     </aside>
@@ -236,7 +291,7 @@ function ArtistBody({ ctx, id, onDrill, onTrace }: BodyProps & { id: string }) {
       ))}
       <h3>Songs</h3>
       {songs.map(({ sid, n }) => (
-        <Item key={sid} label={ctx.songs.get(sid)?.title ?? sid} value={`${n} night${n === 1 ? "" : "s"}`}
+        <Item key={sid} label={ctx.songs.get(sid)?.title ?? sid} value={plural(n, "night")}
           onClick={() => onDrill({ kind: "song", id: sid })} />
       ))}
     </>
@@ -317,7 +372,7 @@ function YearBody({ cat, ctx, year, onDrill, onRange }: BodyProps & { year: stri
       <h3>Nights</h3>
       {nights.map((n) => (
         <Item key={n.id} label={fmtDate(n.date)} sub={n.title || n.types.join(" + ")}
-          value={`${n.playedCount} tracks`} onClick={() => onDrill({ kind: "night", id: n.id })} />
+          value={plural(n.playedCount, "track")} onClick={() => onDrill({ kind: "night", id: n.id })} />
       ))}
       <h3>Most-played songs that year</h3>
       {songs.map(([sid, n]) => (
@@ -345,7 +400,7 @@ function NightBody({ ctx, id, onDrill, onOpenNight }: BodyProps & { id: string }
   return (
     <>
       <Stats items={[
-        [e.playedCount, "tracks"], [(e.durationSec / 3600).toFixed(1), "hours"],
+        [e.playedCount, "tracks"], [fmtHours(e.durationSec), "hours"],
         [e.people.length, "people"], [e.debuts, "debuts"],
       ]} />
       <div className="dr-actions">
@@ -353,7 +408,7 @@ function NightBody({ ctx, id, onDrill, onOpenNight }: BodyProps & { id: string }
       </div>
       <h3>Who brought what</h3>
       {per.map(([pid, n]) => (
-        <Item key={pid} label={ctx.people.get(pid)?.name ?? pid} value={`${n} tracks`}
+        <Item key={pid} label={ctx.people.get(pid)?.name ?? pid} value={plural(n, "track")}
           onClick={() => onDrill({ kind: "person", id: pid })} />
       ))}
     </>

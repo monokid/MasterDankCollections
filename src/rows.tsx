@@ -1,21 +1,13 @@
+import { memo } from "react";
 import type { Catalog, Track } from "./catalog.ts";
 import { highlight } from "./search.ts";
+import { fmtDur } from "./format.ts";
+import { lookups, spotifyUrl } from "./pagehelpers.ts";
+import { ExternalIcon } from "./icons.tsx";
+import "./pages.css";
 
-export const fmtDur = (s: number | null) => {
-  if (!s) return "";
-  const m = Math.floor(s / 60);
-  return `${m}:${String(Math.round(s % 60)).padStart(2, "0")}`;
-};
-
-/** Running time as hours and minutes: "2h 14m", or "34m". */
-export const fmtSpan = (s: number) => {
-  const m = Math.round(s / 60);
-  return m >= 60 ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m` : `${m}m`;
-};
-
-export const fmtDate = (d: string | null) =>
-  d ? new Date(d + "T00:00:00").toLocaleDateString(undefined,
-    { year: "numeric", month: "short", day: "numeric" }) : "undated";
+// The formatters live in format.ts; re-exported because App and others import them from here.
+export { fmtDur, fmtSpan, fmtDate } from "./format.ts";
 
 export function Marked({ value, query }: { value: string; query: string }) {
   if (!query.trim()) return <>{value}</>;
@@ -39,37 +31,47 @@ export const namedOf = (list: Track[]) => list.filter((t) => !t.flags.includes("
  *  place keep the order the folder gave them (the sort is stable). */
 export const byPlayOrder = (a: Track, b: Track) => (a.playOrder ?? 1e9) - (b.playOrder ?? 1e9);
 
-export function TrackRow({ track, cat, query, onOpen, twin }: {
+export const TrackRow = memo(function TrackRow({ track, cat, query, onOpen, twin }: {
   track: Track; cat: Catalog; query: string; onOpen: (t: Track) => void;
   /** For an anonymised row: its named twin, so the list says what each one is. */
   twin?: Track;
 }) {
-  const person = track.personId
-    ? cat.people.find((p) => p.id === track.personId)?.name ?? "" : "";
-  const ev = cat.events.find((e) => e.id === track.eventId);
-  const song = track.songId ? cat.songs.find((s) => s.id === track.songId) : undefined;
+  const lk = lookups(cat);
+  const person = track.personId ? lk.peopleName.get(track.personId) ?? "" : "";
+  const ev = lk.events.get(track.eventId);
+  const song = track.songId ? lk.songs.get(track.songId) : undefined;
   const recurs = song && song.nights.length > 1 ? song.nights.length : 0;
+  const spot = spotifyUrl(track.spotifyUri);
   return (
-    <button className="row" onClick={() => onOpen(track)}>
-      <div className="t">
-        <Marked value={track.title ?? "(untitled)"} query={query} />
-        {track.variant && <span className="chip variant">{track.variant}</span>}
-        {recurs > 0 && (
-          <span className="chip recurs" title={`Played on ${recurs} nights`}>
-            ×{recurs}
-          </span>
-        )}
-        <Flags track={track} />
-      </div>
-      <div className="a">
-        {twin
-          ? <span className="twinhint" title="its named twin">
-              = {twin.artist ? `${twin.artist} — ` : ""}{twin.title}
+    // The Spotify link sits beside the row, not inside it: a link in a button is invalid.
+    <div className={`rowx${spot ? " has-spot" : ""}`}>
+      <button className="row" onClick={() => onOpen(track)}>
+        <div className="t">
+          <Marked value={track.title ?? "(untitled)"} query={query} />
+          {track.variant && <span className="chip variant">{track.variant}</span>}
+          {recurs > 0 && (
+            <span className="chip recurs" title={`Played on ${recurs} nights`}>
+              ×{recurs}
             </span>
-          : <Marked value={track.artist ?? "—"} query={query} />}
-      </div>
-      <div className="p">{person || <span style={{ opacity: 0.45 }}>unknown</span>}</div>
-      <div className="d">{ev?.date?.slice(0, 4) ?? "??"} · {fmtDur(track.durationSec)}</div>
-    </button>
+          )}
+          <Flags track={track} />
+        </div>
+        <div className="a">
+          {twin
+            ? <span className="twinhint" title="its named twin">
+                = {twin.artist ? `${twin.artist} — ` : ""}{twin.title}
+              </span>
+            : <Marked value={track.artist ?? "—"} query={query} />}
+        </div>
+        <div className="p">{person || <span className="faint">unknown</span>}</div>
+        <div className="d">{ev?.date?.slice(0, 4) ?? "??"} · {fmtDur(track.durationSec)}</div>
+      </button>
+      {spot && (
+        <a className="spot" href={spot} target="_blank" rel="noreferrer"
+          title="Open in Spotify" aria-label={`Open ${track.title ?? "track"} in Spotify`}>
+          <ExternalIcon size={15} />
+        </a>
+      )}
+    </div>
   );
-}
+});
