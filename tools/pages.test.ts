@@ -127,6 +127,16 @@ test("a set splits into phases in the order given, then the loose tracks", () =>
   assert.deepEqual(s.ordered.map((t) => t.id), ["b", "e2", "a", "c", "d"]);
   assert.deepEqual(s.loose.map((t) => t.id), ["c", "d"]);
 });
+test("anonymised files in a partly named list are set apart, and an all-anonymous list is left whole", () => {
+  const anon = (id: string) => tr(id, "e", null, { flags: ["anon"] });
+  const mixed = splitSet([tr("a", "e", null), anon("x"), tr("b", "e", null), anon("y")], []);
+  assert.deepEqual(mixed.loose.map((t) => t.id), ["a", "b"], "named songs keep their order");
+  assert.deepEqual(mixed.unnamed.map((t) => t.id), ["x", "y"], "the unnamed files follow, apart");
+  assert.deepEqual(mixed.ordered.map((t) => t.id), ["a", "b"], "and stay out of a copied setlist");
+  const whole = splitSet([anon("p"), anon("q")], []);
+  assert.deepEqual(whole.loose.map((t) => t.id), ["p", "q"]);
+  assert.equal(whole.unnamed.length, 0);
+});
 test("setlist text: Artist - Title per line, title alone when the artist is unknown", () => {
   assert.equal(
     setlistText([{ artist: "Nightwish", title: "Ghost Love Score" }, { artist: null, title: "Aurora" }, { artist: "X", title: null }]),

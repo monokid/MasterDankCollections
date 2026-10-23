@@ -327,6 +327,20 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
                 </>
               )}
 
+              {split.unnamed.length > 0 && (
+                <>
+                  <div className="phasehead" style={{ marginTop: 14 }}>
+                    <span className="name dimname">No name on file</span>
+                    <span className="meta">{plural(split.unnamed.length, "file")} · only anonymised copies exist</span>
+                  </div>
+                  <div className="rows">
+                    {split.unnamed.map((t) => (
+                      <TrackRow key={t.id} track={t} cat={cat} query="" onOpen={onOpen} />
+                    ))}
+                  </div>
+                </>
+              )}
+
               {others.length > 0 && (
                 <details className="anonlist">
                   <summary>

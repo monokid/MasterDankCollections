@@ -137,7 +137,19 @@ export function splitSet(played: Track[], phaseIds: string[]) {
     if (t.phaseId && known.has(t.phaseId)) byPhase.get(t.phaseId)!.push(t);
     else loose.push(t);
   }
-  return { byPhase, loose, ordered: [...phaseIds.flatMap((id) => byPhase.get(id)!), ...loose] };
+  // A list that has names for some of its songs and not for others is not a
+  // mixed list: the others are files nothing could name (only their anonymised
+  // copies survive), and they read better set apart than threaded between songs.
+  // A list with no names at all stays as it is.
+  const unnamed: Track[] = [];
+  if (played.some((t) => !t.flags.includes("anon"))) {
+    const out = (xs: Track[]) => {
+      for (let i = xs.length - 1; i >= 0; i--) if (xs[i].flags.includes("anon")) unnamed.unshift(...xs.splice(i, 1));
+    };
+    for (const xs of byPhase.values()) out(xs);
+    out(loose);
+  }
+  return { byPhase, loose, unnamed, ordered: [...phaseIds.flatMap((id) => byPhase.get(id)!), ...loose] };
 }
 
 /** Link to a track on Spotify, or null when the uri is not a plain track id. */
