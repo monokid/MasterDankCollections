@@ -1,12 +1,12 @@
 /** Wired into `npm run verify`: plaintext must never be tracked by git.
- *  Fails if git tracks any data/*.json, anything under public/data/ (the sealed
+ *  Fails if git tracks anything under data/ but the sealed inputs, anything under public/data/ (the sealed
  *  vault and teaser are generated in CI, not committed), or any .env* file. */
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 
 export function violations(files: string[]): string[] {
   return files.filter((f) =>
-    /^data\/[^/]*\.json$/.test(f) ||
+    (f.startsWith("data/") && f !== "data/inputs.enc") ||
     f.startsWith("public/data/") ||
     /(^|\/)\.env/.test(f));
 }
