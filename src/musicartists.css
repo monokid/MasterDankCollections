@@ -1,0 +1,100 @@
+/* The Music page's Artists view, and the album grouping on the artist page.
+   The Artists view is virtualised with a fixed height per row kind: the numbers
+   below must match HEIGHT in artistalbums.ts (head 56, artist 84, album 50, song 40).
+   Nothing here may change a row's height. */
+
+.ma-wall { position: relative; min-width: 0; }
+.ma-pos { position: absolute; left: 0; right: 0; box-sizing: border-box; }
+.ma-note { margin: 0 0 12px; justify-content: space-between; }
+.ma-note .linkbtn { font-size: 12.5px; }
+
+/* ---------------------------------------------------------------- artist row */
+
+.ma-slot { padding-bottom: 6px; }
+.ma-artist {
+  height: 100%; box-sizing: border-box; display: grid; grid-template-columns: 32px 64px minmax(0, 1fr) auto;
+  align-items: center; gap: 12px; padding: 0 14px 0 8px; border-radius: 14px;
+  background: var(--glass); border: 1px solid transparent; transition: border-color 0.16s, background 0.16s;
+}
+.ma-artist:hover { border-color: var(--accent); background: var(--hover); }
+.ma-artist.open { border-color: rgba(185, 140, 255, 0.4); }
+.ma-chev {
+  appearance: none; border: 0; background: none; cursor: pointer; width: 32px; height: 40px; padding: 0;
+  display: grid; place-items: center; color: var(--ink-dim); border-radius: 10px; font-size: 15px;
+}
+.ma-chev span { display: inline-block; transition: transform 0.18s var(--ease-out); }
+.ma-artist.open .ma-chev span { transform: rotate(90deg); }
+.ma-chev:hover { color: var(--ink); background: var(--hover); }
+.ma-mos {
+  display: grid; grid-template-columns: 31px 31px; gap: 2px; width: 64px; height: 64px; overflow: hidden;
+  border-radius: 10px; background: var(--panel-edge);
+}
+.ma-mos .ma-cv, .ma-album .ma-acv { border-radius: 0; }
+.ma-mos .cv-init { display: none; }
+.ma-main { min-width: 0; display: grid; gap: 3px; }
+.ma-name {
+  appearance: none; border: 0; background: none; padding: 0; margin: 0; cursor: pointer; justify-self: start; max-width: 100%;
+  font: 680 16px/22px var(--body); color: var(--ink); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ma-name:hover { text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+.ma-name.plain { cursor: default; }
+.ma-name.plain:hover { text-decoration: none; }
+.ma-name.none { font-style: italic; color: var(--ink-dim); }
+.ma-line { font-size: 12.5px; line-height: 16px; color: var(--ink-faint); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ma-dots { width: 120px; }
+.ma-chev:focus-visible, .ma-name:focus-visible, .ma-stitle:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+
+/* ----------------------------------------------------------- album and songs */
+
+.ma-child { padding-left: 52px; }
+.ma-album {
+  height: 100%; box-sizing: border-box; display: flex; align-items: center; gap: 12px; padding: 0 12px 0 10px;
+  border-left: 2px solid rgba(185, 140, 255, 0.35); background: rgba(18, 14, 42, 0.45);
+}
+.ma-album .cv { border-radius: 7px; }
+.ma-aname { min-width: 0; flex: 0 1 auto; font: 650 14px/20px var(--body); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ma-album.none .ma-aname { font-weight: 560; color: var(--ink-dim); font-style: italic; }
+.ma-ameta { margin-left: auto; flex: none; font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.ma-song {
+  position: relative; height: 100%; box-sizing: border-box; display: grid; align-items: center; gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 56px 56px 80px 64px; padding: 0 12px 0 46px;
+  border-left: 2px solid rgba(185, 140, 255, 0.35); background: rgba(18, 14, 42, 0.45);
+  transition: background 0.14s;
+}
+.ma-song:hover { background: var(--hover); }
+.ma-stitle {
+  appearance: none; border: 0; background: none; padding: 0; margin: 0; cursor: pointer; text-align: left; color: var(--ink);
+  font: 560 13.5px/20px var(--body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+/* the whole row opens the song; the links sit above that layer */
+.ma-stitle::after { content: ""; position: absolute; inset: 0; }
+.ma-stitle:focus-visible { outline: none; }
+.ma-song:has(.ma-stitle:focus-visible) { outline: 2px solid var(--ring); outline-offset: -2px; }
+.ma-sc { font-size: 12.5px; color: var(--ink-dim); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ma-sc.r { text-align: right; }
+.ma-slinks { position: relative; z-index: 2; overflow: visible; display: flex; justify-content: flex-end; }
+.ma-song .sl-a { opacity: 0.6; }
+.ma-song:hover .sl-a, .ma-song:focus-within .sl-a { opacity: 1; }
+
+@media (max-width: 760px) {
+  .ma-dots { display: none; }
+  .ma-artist { grid-template-columns: 32px 64px minmax(0, 1fr); }
+  .ma-child { padding-left: 16px; }
+  .ma-song { grid-template-columns: minmax(0, 1fr) 80px 64px; padding-left: 14px; }
+  .ma-song .ma-rel, .ma-song .ma-sc:nth-child(2) { display: none; }
+}
+
+/* ------------------------------------------------- artist page: album groups */
+
+.ma-group { margin-top: 14px; }
+.ma-ghead {
+  display: flex; align-items: center; gap: 12px; padding: 6px 4px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--panel-edge);
+}
+.ma-ghead .cv { border-radius: 8px; }
+.ma-gname { margin: 0; min-width: 0; font: 680 16px/22px var(--body); color: var(--ink); overflow-wrap: anywhere; }
+.ma-group.none .ma-gname { font-weight: 580; font-style: italic; color: var(--ink-dim); }
+.ma-gmeta { margin-left: auto; flex: none; font-size: 12.5px; color: var(--ink-faint); font-variant-numeric: tabular-nums; text-align: right; }
+.ma-gcover { flex: none; }
+.ma-gtools { display: flex; align-items: center; gap: 8px; }

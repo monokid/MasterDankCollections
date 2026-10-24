@@ -1,0 +1,19 @@
+/* The Home title: the header lockup (Logo.tsx, .lw-top / .lw-bot) at poster size.
+   Two fixed lines, never wrapping, so the title is the same height at every width:
+   "Master Dank" big and gradient, "COLLECTIONS" small, tracked, uppercase. */
+.home-word {
+  margin: 0; display: flex; flex-direction: column; align-items: center;
+  font-family: var(--display); line-height: 1; white-space: nowrap;
+  font-size: clamp(30px, 5.4vw, 80px);
+  filter: drop-shadow(0 0 22px rgba(150, 120, 255, 0.55)) drop-shadow(0 2px 10px rgba(5, 4, 16, 0.9));
+}
+.hw-top {
+  font-weight: 800; letter-spacing: -0.02em;
+  background: linear-gradient(92deg, #efeaff 5%, var(--accent) 55%, var(--hot));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hw-bot {
+  margin-top: 0.2em; font-weight: 500; font-size: 0.3em;
+  letter-spacing: 0.34em; padding-left: 0.34em;   /* the padding balances the trailing tracking, so it stays centred */
+  text-transform: uppercase; color: var(--accent-2); text-shadow: 0 0 18px rgba(98, 232, 255, 0.5);
+}

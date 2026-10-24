@@ -1,0 +1,79 @@
+/* Shared song-list pieces: column grid and sticky header, the two link buttons,
+   the Columns popover. Rows lay out on the grid in --cols (set by the list). */
+
+/* ------------------------------------------------------------------ grid */
+
+.sc-list { --sc-gap: 12px; }
+.sc-list .sc-rowwrap { position: relative; }
+.sc-list .row {
+  grid-template-columns: var(--cols);
+  gap: var(--sc-gap);
+  padding: 7px 16px;
+}
+/* the open song is no longer a direct child of .songgroup (a wrapper holds the links) */
+.songgroup.open .sc-rowwrap > .row {
+  background: rgba(46, 34, 92, 0.62); border-color: var(--panel-edge);
+  border-bottom-left-radius: 0; border-bottom-right-radius: 0;
+}
+.resultlist.sc-list .songgroup:not(.open) { contain-intrinsic-size: auto 54px; }
+
+.sc-c { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--ink-dim); }
+.sc-c.r, .sc-h.r { text-align: right; }
+.sc-c.sc-title { font-size: inherit; font-weight: 520; color: inherit; }
+.sc-c.sc-cover { display: flex; align-items: center; }
+.sc-c.sc-duration, .sc-c.sc-released, .sc-c.sc-nights, .sc-c.sc-when { font-variant-numeric: tabular-nums; }
+.sc-c.sc-when, .sc-c.sc-released { color: var(--ink-faint); font-size: 12.5px; }
+.sc-unknown { color: var(--ink-faint); opacity: 0.6; }
+
+/* --------------------------------------------------------------- header */
+
+.sc-head {
+  position: sticky; top: var(--sc-top, 160px); z-index: 4;
+  display: grid; grid-template-columns: var(--cols); gap: var(--sc-gap);
+  padding: 5px 17px; margin-bottom: 2px;
+  background: rgba(10, 8, 26, 0.94); backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--panel-edge);
+  font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-faint);
+}
+.sc-h { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-hb {
+  appearance: none; background: none; border: 0; padding: 2px 0; font: inherit; letter-spacing: inherit;
+  text-transform: inherit; color: inherit; cursor: pointer; display: inline-flex; gap: 4px; align-items: center;
+}
+.sc-hb:hover, .sc-hb.on { color: var(--ink); }
+.sc-hb:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; border-radius: 4px; }
+.sc-arrow { font-size: 9px; min-width: 9px; }
+.sc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* ---------------------------------------------------------------- links */
+
+.sl { display: inline-flex; gap: 2px; align-items: center; }
+.sc-rowwrap > .sc-links { position: absolute; right: 17px; top: 50%; transform: translateY(-50%); }
+.sl-a {
+  width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px;
+  color: var(--ink-dim); opacity: 0.6; text-decoration: none;
+}
+.sc-rowwrap:hover .sl-a, .sc-rowwrap:focus-within .sl-a, .sl-a:focus-visible { opacity: 1; }
+.sl-a:focus-visible { outline: 2px solid var(--accent-2); outline-offset: -2px; }
+.sl-sp:hover, .sl-sp.exact { color: var(--ok); }
+.sl-sp:hover { background: rgba(110, 245, 192, 0.16); }
+.sl-yt:hover { background: rgba(255, 90, 90, 0.16); color: #ff7a7a; }
+
+/* ------------------------------------------------------- columns popover */
+
+.cm { position: relative; display: inline-block; }
+.cm-btn { font-size: 12.5px; }
+.cm-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 5px; vertical-align: 1px; }
+.cm-pop {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 150px;
+  display: grid; gap: 2px; padding: 8px;
+  background: rgba(16, 12, 38, 0.97); border: 1px solid var(--panel-edge); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.cm-item { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--ink); user-select: none; }
+.cm-item:hover { background: var(--hover); }
+.cm-item input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+.cm-reset { justify-self: start; margin-top: 4px; }
+.cm-reset:disabled { opacity: 0.4; cursor: default; text-decoration: none; }
+
+@media print { .sc-head, .sc-links, .cm { display: none !important; } }

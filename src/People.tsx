@@ -18,6 +18,9 @@ import {
 } from "./peoplestats.ts";
 import { useToast } from "./Toast.tsx";
 import { CopyIcon } from "./icons.tsx";
+import SongLinks, { CellText } from "./SongLinks.tsx";
+import { songColumns, songFactsFor, type SongInfo } from "./songcols.ts";
+import { linkable } from "./songrows.ts";
 import "./people.css";
 
 export interface PeoplePageProps {
@@ -103,6 +106,28 @@ function Gallery({ cat, cards, onOpenPerson }: { cat: Catalog; cards: Card[]; on
     </div>
   );
 }
+
+// ------------------------------------------------------------ song row facts
+
+/** Album, length, year and genre cells come from the shared song columns, so they
+ *  say exactly what Search and Music say. */
+const STD = Object.fromEntries(songColumns<SongInfo>((i) => i).map((c) => [c.id, c]));
+
+/** The facts and links that end a song row. Album and genre carry .pp-fc: hidden below 1100px. */
+function SongBits({ info }: { info: SongInfo }) {
+  const cell = (id: string) => <CellText value={STD[id].text(info)} title={STD[id].title?.(info)} />;
+  return (
+    <>
+      <span className="pp-fc" title="Album">{cell("album")}</span>
+      <span title="Length">{cell("duration")}</span>
+      <span title="Released">{cell("released")}</span>
+      <span className="pp-fc" title="Genre">{cell("genre")}</span>
+    </>
+  );
+}
+const SongTail = ({ info }: { info: SongInfo }) => (
+  <span className="pp-fk">{linkable(info) && <SongLinks song={info} />}</span>
+);
 
 // ------------------------------------------------------------------ profile
 
@@ -250,17 +275,26 @@ function ProfileView({ cat, enrich, personId, cards, onOpenPerson, onOpenNight, 
 
       {has.story && <StorySection pr={pr} onOpenNight={onOpenNight} onTrace={trace} />}
       {has.taste && <TasteSection pr={pr} onOpenArtist={onOpenArtist} />}
-      {has.first && <FirstSection pr={pr} onOpenSong={onOpenSong} onOpenNight={onOpenNight} />}
+      {has.first && <FirstSection cat={cat} enrich={enrich} pr={pr} onOpenSong={onOpenSong} onOpenNight={onOpenNight} />}
       {has.sets && <SetsSection pr={pr} />}
       {has.outliers && (
         <Sec id="outliers" title="Outliers">
-          <ul className="pp-list">
-            {pr.outliers.map((o, i) => (
-              <li key={i}>
-                {o.eventId && <button className="pp-link wrap" onClick={() => onOpenNight(o.eventId!)}>{o.text}</button>}
-                {o.songId && <button className="pp-link wrap" onClick={() => onOpenSong(o.songId!)}>{o.text}</button>}
-              </li>
-            ))}
+          <ul className="pp-list pp-rich">
+            {pr.outliers.map((o, i) => {
+              const info = o.songId ? songFactsFor(cat, enrich, o.songId) : null;
+              return (
+                <li key={i} className={info ? undefined : "wide"}>
+                  {o.eventId && <button className="pp-link wrap" onClick={() => onOpenNight(o.eventId!)}>{o.text}</button>}
+                  {o.songId && info && (
+                    <>
+                      <span className="pp-sm"><button className="pp-link wrap" onClick={() => onOpenSong(o.songId!)}>{o.text}</button></span>
+                      <SongBits info={info} />
+                      <SongTail info={info} />
+                    </>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </Sec>
       )}
@@ -391,7 +425,7 @@ function Venn({ pr, o }: { pr: Profile; o: Profile["overlaps"][number] }) {
 
 // -------------------------------------------------------------------- first
 
-function FirstSection({ pr, onOpenSong, onOpenNight }: { pr: Profile; onOpenSong: (id: string) => void; onOpenNight: (id: string) => void }) {
+function FirstSection({ cat, enrich, pr, onOpenSong, onOpenNight }: { cat: Catalog; enrich: EnrichMap | null; pr: Profile; onOpenSong: (id: string) => void; onOpenNight: (id: string) => void }) {
   const [all, setAll] = useState(false);
   const shown = all ? pr.firstBrought : pr.firstBrought.slice(0, 20);
   return (
@@ -399,14 +433,21 @@ function FirstSection({ pr, onOpenSong, onOpenNight }: { pr: Profile; onOpenSong
       {pr.firstBrought.length > 0 && (
         <>
           <p className="pp-text"><b>{fmtCount(pr.firstBrought.length)}</b> {pr.firstBrought.length === 1 ? "song" : "songs"} entered the library in one of their sets, newest first. When several people brought a song on the same night, it counts for each of them.</p>
-          <ul className="pp-songs">
-            {shown.map((s) => (
-              <li key={s.songId}>
-                <button className="pp-link" onClick={() => onOpenSong(s.songId)}>{s.title}</button>
-                <span className="pp-dim"> {s.artist}</span>
-                <button className="pp-date" onClick={() => onOpenNight(s.eventId)} aria-label={`Open the night of ${fmtDate(s.date)}`}>{fmtDate(s.date)}</button>
-              </li>
-            ))}
+          <ul className="pp-songs pp-rich dated">
+            {shown.map((s) => {
+              const info = songFactsFor(cat, enrich, s.songId);
+              return (
+                <li key={s.songId}>
+                  <span className="pp-sm">
+                    <button className="pp-link" onClick={() => onOpenSong(s.songId)}>{s.title}</button>
+                    <span className="pp-dim"> {s.artist}</span>
+                  </span>
+                  <SongBits info={info} />
+                  <button className="pp-date" onClick={() => onOpenNight(s.eventId)} aria-label={`Open the night of ${fmtDate(s.date)}`}>{fmtDate(s.date)}</button>
+                  <SongTail info={info} />
+                </li>
+              );
+            })}
           </ul>
           {pr.firstBrought.length > 20 && (
             <button className="pp-linkbtn" onClick={() => setAll((v) => !v)} aria-expanded={all}>
@@ -419,14 +460,21 @@ function FirstSection({ pr, onOpenSong, onOpenNight }: { pr: Profile; onOpenSong
         <>
           <h3 className="pp-h3">Seeds that grew</h3>
           <p className="pp-hint">Songs they first brought that came back on three or more later nights.</p>
-          <ul className="pp-seeds">
-            {pr.seeds.map((s) => (
-              <li key={s.songId}>
-                <button className="pp-link" onClick={() => onOpenSong(s.songId)}>{s.title}</button>
-                <span className="pp-dim"> ({s.artist})</span>, first brought {fmtDate(s.firstDate)}, came back on {plural(s.nightsAfter, "more night")}
-                {s.others > 0 ? `, carried on by ${plural(s.others, "other person", "other people")}.` : ", always in their own sets."}
-              </li>
-            ))}
+          <ul className="pp-seeds pp-rich">
+            {pr.seeds.map((s) => {
+              const info = songFactsFor(cat, enrich, s.songId);
+              return (
+                <li key={s.songId}>
+                  <span className="pp-sm">
+                    <button className="pp-link" onClick={() => onOpenSong(s.songId)}>{s.title}</button>
+                    <span className="pp-dim"> ({s.artist})</span>, first brought {fmtDate(s.firstDate)}, came back on {plural(s.nightsAfter, "more night")}
+                    {s.others > 0 ? `, carried on by ${plural(s.others, "other person", "other people")}.` : ", always in their own sets."}
+                  </span>
+                  <SongBits info={info} />
+                  <SongTail info={info} />
+                </li>
+              );
+            })}
           </ul>
         </>
       )}

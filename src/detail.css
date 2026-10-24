@@ -165,3 +165,33 @@
 .dt-simtext span { color: var(--ink-dim); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dt-simn { color: var(--ink-faint); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dt-sub { margin: -6px 0 10px; color: var(--ink-faint); font-size: 12.5px; }
+
+/* about this song: a quiet facts list */
+.dt-about { margin-bottom: 14px; }
+.dt-about dl { display: grid; gap: 7px; margin: 0; font-size: 14px; }
+.dt-aboutrow { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 4px 16px; }
+.dt-about dt { color: var(--ink-faint); }
+.dt-about dd { margin: 0; overflow-wrap: anywhere; }
+.dt-about .dt-fam { margin: 0 0 0 8px; }
+.dt-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 8px; vertical-align: 1px; }
+.dt-tag { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; color: var(--ink-dim); background: var(--tint); border: 1px solid var(--panel-edge); }
+
+/* full-size outbound links */
+.dt-outlinks { margin-top: 10px; }
+.dt-outbtn { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; padding: 8px 16px; }
+.dt-outbtn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.dt-sp.exact { border-color: var(--ok); }
+.dt-sp:hover { border-color: var(--ok); }
+.dt-yt:hover { border-color: #ff7a7a; }
+.dt-head > .dt-linknote { margin: 8px 0 0; }
+
+/* similar / same-artist rows: duration, year, then compact links outside the row link */
+.dt-simwrap { position: relative; }
+.dt-simwrap > .dt-simrow { grid-template-columns: 40px minmax(0, 1fr) 46px 40px auto; padding-right: 74px; }
+.dt-simwrap > .dt-simlinks { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); }
+.dt-simwrap .sl-a { opacity: 1; }
+.dt-simdur, .dt-simyr { color: var(--ink-faint); font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; }
+@media (max-width: 520px) {
+  .dt-simwrap > .dt-simrow { grid-template-columns: 40px minmax(0, 1fr) auto; }
+  .dt-simdur, .dt-simyr { display: none; }
+}

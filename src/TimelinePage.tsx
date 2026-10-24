@@ -6,6 +6,7 @@ import { catalogIndex } from "./catalogIndex.ts";
 import { isShown } from "./config.ts";
 import type { Range } from "./analytics.ts";
 import type { EnrichMap } from "./enrich.ts";
+import type { MilestoneLink } from "./milestones.ts";
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
@@ -51,9 +52,14 @@ function TraceList({ cat, trace, onOpen }: {
 /** The Timeline view: the chart, the lit-up list under it, and the side panel for a picked night. */
 export default function TimelinePage({
   cat, trace, setTrace, selected, setSelected, range, setRange,
-  onInsights, onOpen, onOpenNight, onTrace, enrich,
+  onInsights, onOpen, onOpenNight, onTrace, enrich, onOpenPerson, onOpenArtist, onOpenSong,
 }: {
   enrich?: EnrichMap | null;
+  /** Where a milestone's person / artist / song link goes. Without them the link lights that
+   *  person, artist or song up on this timeline instead (the same trace as everywhere here). */
+  onOpenPerson?: (id: string) => void;
+  onOpenArtist?: (id: string) => void;
+  onOpenSong?: (songId: string) => void;
   cat: Catalog;
   trace: Trace | null; setTrace: (t: Trace | null) => void;
   selected: string | null; setSelected: (id: string | null) => void;
@@ -63,6 +69,23 @@ export default function TimelinePage({
   onOpenNight: (id: string) => void;
   onTrace: (t: Trace) => void;
 }) {
+  const ix = catalogIndex(cat);
+  const shownNights = (ids: string[]) => new Set(ids.filter((id) => { const e = ix.event.get(id); return !!e && isShown(e); }));
+  const onMilestoneLink = (l: MilestoneLink) => {
+    if (l.type === "person") {
+      if (onOpenPerson) return onOpenPerson(l.id);
+      onTrace({ kind: "person", id: l.id, label: ix.person.get(l.id)?.name ?? l.id,
+        nights: shownNights(cat.events.filter((e) => e.people.includes(l.id)).map((e) => e.id)) });
+    } else if (l.type === "artist") {
+      if (onOpenArtist) return onOpenArtist(l.id);
+      const a = ix.artist.get(l.id);
+      onTrace({ kind: "artist", id: l.id, label: a?.name ?? l.id, nights: shownNights(a?.nights ?? []) });
+    } else if (l.type === "song") {
+      if (onOpenSong) return onOpenSong(l.id);
+      const s = ix.song.get(l.id);
+      onTrace({ kind: "song", id: l.id, label: s ? `${s.title} · ${s.artist}` : l.id, nights: shownNights(s?.nights ?? []) });
+    }
+  };
   return (
     <div className="page wide">
       <h1>The decade</h1>
@@ -75,7 +98,8 @@ export default function TimelinePage({
           <Timeline
             cat={cat} trace={trace} onClearTrace={() => setTrace(null)}
             selected={selected} onSelect={setSelected}
-            range={range} onRange={setRange} onInsights={onInsights} enrich={enrich} />
+            range={range} onRange={setRange} onInsights={onInsights} enrich={enrich}
+            onMilestoneLink={onMilestoneLink} />
           {trace && <TraceList cat={cat} trace={trace} onOpen={onOpen} />}
         </div>
         {selected && (

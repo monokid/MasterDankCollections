@@ -6,6 +6,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { EnrichMap } from "./enrich.ts";
 import { homeLines, homeSound } from "./timelinesound.ts";
 import "./timelinesound.css";
+import "./home.css";
 import { createAmoeba, type Amoeba } from "./amoeba.ts";
 import Gate, { type GateControl } from "./Gate.tsx";
 import { hasSession, resume, unlock } from "./vault.ts";
@@ -20,6 +21,7 @@ const hook = {
   enter: null as null | (() => void),
   open: null as null | (() => void),
   submit: null as null | ((pw: string) => Promise<boolean>),
+  behave: null as null | ((name: string) => boolean),
 };
 declare global {
   interface Window {
@@ -27,6 +29,8 @@ declare global {
       state(): Phase; enter(): void;
       /** Dev builds only. */
       gate?: { open(): void; submit(pw: string): Promise<boolean> };
+      /** Dev builds only: run an amoeba behaviour now (bloom, split, reach, jelly, shimmer, sneeze). False if unknown or reduced motion. */
+      behave?(name: string): boolean;
     };
   }
 }
@@ -37,6 +41,7 @@ if (typeof window !== "undefined") {
       open: () => hook.open?.(),
       submit: (pw) => hook.submit?.(pw) ?? Promise.resolve(false),
     };
+    window.__mdcHome.behave = (name) => hook.behave?.(name) ?? false;
   }
 }
 
@@ -144,9 +149,10 @@ export default function Home({ onEnter, leaving: leavingProp, enrich = null, son
     });
     amoeba.current = a;
     hook.phase = "idle";
+    hook.behave = (name) => a.behave(name);
     return () => {
       a.dispose(); amoeba.current = null; hook.phase = "gone";
-      hook.enter = hook.open = hook.submit = null;
+      hook.enter = hook.open = hook.submit = hook.behave = null;
       window.clearTimeout(touchTimer.current);
       window.clearTimeout(closeTimer.current);
     };
@@ -280,7 +286,7 @@ export default function Home({ onEnter, leaving: leavingProp, enrich = null, son
 
       <header className="home-title">
         <h1 className="home-word">
-          <span className="hw-top">Master Dank</span>{" "}
+          <span className="hw-top">Master Dank</span>
           <span className="hw-bot">Collections</span>
         </h1>
         <p className="home-tag">a decade of nights, in sound</p>

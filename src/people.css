@@ -213,3 +213,27 @@
   .pp-card:hover, .pp-card:focus-visible, .pp-tag:hover, .pp-tick:hover { transform: none; }
 }
 @media print { .pp-nav, .pp-pn, .pp-orb { display: none; } .pp-anim .pp-sec { opacity: 1; transform: none; } }
+
+/* ------------------------------------------------- song rows: facts and links */
+/* The song lists (First brought, Seeds that grew, outliers that are songs) share one
+   grid: title | album | length | year | genre | [date] | links. Album and genre
+   (.pp-fc) are hidden below 1100px. */
+.pp-rich { --pp-cols: minmax(0, 2.4fr) minmax(0, 1.2fr) 46px 42px minmax(0, 0.9fr) 60px; }
+.pp-rich.dated { --pp-cols: minmax(0, 2.4fr) minmax(0, 1.2fr) 46px 42px minmax(0, 0.9fr) auto 60px; }
+.pp-rich li { display: grid; grid-template-columns: var(--pp-cols); gap: 0 12px; align-items: center; }
+.pp-rich li.wide { display: block; }
+.pp-rich .pp-sm { min-width: 0; overflow-wrap: anywhere; }
+.pp-rich li > span:not(.pp-sm):not(.pp-fk) {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12.5px; color: var(--ink-dim); font-variant-numeric: tabular-nums;
+}
+.pp-rich .pp-date { margin-left: 0; justify-self: start; }
+.pp-rich .pp-fk { justify-self: end; display: inline-flex; }
+.pp-rich .sl-a { width: 24px; height: 24px; }
+.pp-rich li:hover .sl-a, .pp-rich li:focus-within .sl-a { opacity: 1; }
+@media (max-width: 1099px) {
+  .pp-rich .pp-fc { display: none; }
+  .pp-rich { --pp-cols: minmax(0, 1fr) 46px 42px 60px; }
+  .pp-rich.dated { --pp-cols: minmax(0, 1fr) 46px 42px auto 60px; }
+}
+@media print { .pp-fk { display: none; } }

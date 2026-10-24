@@ -19,6 +19,7 @@
  *  on the network is NOT cached; the next run tries it again.
  *
  *  Usage: npm run enrich -- [--n 200] [--seed 1] [--all] [--crosscheck]
+ *         npm run enrich -- --fill-album   (second pass: album + full release date, matched songs only)
  *         npm run enrich -- --report [--compare --n 200 --seed 1]
  *
  *  MusicBrainz asks for at most one request a second and an identifying
@@ -29,6 +30,7 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fold } from "./distill.ts";
 import type { Catalog, Song } from "../src/catalog.ts";
+import { pickRelease, dateForYear } from "./enrich-album.ts";
 import {
   titleKeys, artistCandidates, artistNames, titleMatch, artistMatch, yearImpossible,
   yearsDisagree, looksClassical, familyOf, genreAgrees,
@@ -40,6 +42,9 @@ const PILOT1 = join(ROOT, "data", "enrich-pilot1.json");
 const UA = "MasterDankCollections/0.1 ( https://github.com/monokid/MasterDankCollections )";
 const MB = "https://musicbrainz.org/ws/2";
 const VERSION = 2;
+/** Stamped by the album pass (--fill-album) on a record it completed. The main
+ *  pass treats any v >= VERSION as current, so this never triggers a re-lookup. */
+const ALBUM_VERSION = 3;
 
 export type Confidence = "high" | "medium" | "none";
 export type Source = "musicbrainz" | "deezer" | "itunes" | "spotify" | "heuristic";
@@ -83,6 +88,11 @@ export interface Enriched {
   query: string;
   matched: string | null;
   v?: number;
+  /** Album pass: title of the release the year/cover came from (null: matched but none found). */
+  album?: string | null;
+  /** 'YYYY-MM-DD' | 'YYYY-MM' | 'YYYY'; its year always equals `year`. */
+  releaseDate?: string | null;
+  albumSource?: Source | null;
 }
 
 interface Store { schema: "mdc-enrich/2"; songs: Record<string, Enriched> }
@@ -253,7 +263,7 @@ async function fromMusicBrainz(song: Song, base: Enriched, found: { hits: Hit[];
 
 // ---------------------------------------------------------- Deezer and iTunes
 
-interface Fallback { via: string; exact: boolean; year: number | null; genres: string[]; coverUrl: string | null; matched: string }
+interface Fallback { via: string; exact: boolean; year: number | null; genres: string[]; coverUrl: string | null; matched: string; album: string | null; releaseDate: string | null }
 
 async function deezer(song: Song): Promise<Fallback | null> {
   const keys = titleKeys(song.title), names = artistNames(song.artist), cands = artistCandidates(song.artist);
@@ -279,6 +289,7 @@ async function deezer(song: Song): Promise<Fallback | null> {
       genres: (alb?.genres?.data ?? []).map((g: any) => g.name).filter(Boolean),
       coverUrl: alb?.cover_medium ?? t.album?.cover_medium ?? null,
       matched: `${t.artist?.name} - ${t.title}`,
+      album: alb?.title ?? t.album?.title ?? null, releaseDate: alb?.release_date ?? null,
     };
   }
   return null;
@@ -299,6 +310,7 @@ async function itunes(song: Song): Promise<Fallback | null> {
     genres: t.primaryGenreName ? [t.primaryGenreName] : [],
     coverUrl: t.artworkUrl100 ? String(t.artworkUrl100).replace("100x100", "300x300") : null,
     matched: `${t.artistName} - ${t.trackName}`,
+    album: t.collectionName ?? null, releaseDate: t.releaseDate ? String(t.releaseDate).slice(0, 10) : null,
   };
 }
 
@@ -370,6 +382,57 @@ async function crosscheck(song: Song, e: Enriched): Promise<void> {
   e.check = { deezerYear: d?.year ?? null, disagrees: yearsDisagree(e.year, d?.year ?? null) };
 }
 
+// --------------------------------------------------------------- album pass
+
+/** One request for a MusicBrainz song (its stored mbid); a Deezer/iTunes song is
+ *  searched again in its own source. Returns null when nothing usable came back;
+ *  throws on a network failure. Neither case touches the record. */
+async function albumFor(song: Song, e: Enriched): Promise<{ album: string; releaseDate: string | null; source: Source } | null> {
+  if (e.source === "musicbrainz" && e.mbid) {
+    const d = await getJson("mb", `${MB}/recording/${e.mbid}?inc=releases+release-groups&fmt=json`);
+    const pick = pickRelease(d?.releases ?? [], e.year, d?.["first-release-date"]);
+    if (pick) return { ...pick, source: "musicbrainz" };
+    // The stored recording is the earliest-dated one, often a bootleg or video with no
+    // official release. Try the other recordings of the same song: one more request.
+    const keys = titleKeys(song.title), names = artistNames(song.artist);
+    const hits = judge(await mbRecordings(`recording:"${lucene(keys[0])}" AND artist:"${lucene(artistCandidates(song.artist)[0])}"`, 50), keys, names, 85);
+    const alt = pickRelease(hits.flatMap((h) => h.rec.releases ?? []), e.year);
+    return alt ? { ...alt, source: "musicbrainz" } : null;
+  }
+  const f = e.source === "deezer" ? await deezer(song) : e.source === "itunes" ? await itunes(song) : null;
+  if (!f?.album) return null;
+  // The album only counts if it is the one the stored year came from.
+  if (e.year && f.year !== e.year) return null;
+  return { album: f.album, releaseDate: dateForYear(e.year, f.releaseDate), source: e.source as Source };
+}
+
+async function fillAlbum(args: string[]) {
+  const { byId } = context(args);
+  const store = load();
+  const todo = Object.values(store.songs).filter((e) => e.confidence !== "none" && e.album === undefined && byId.has(e.songId));
+  const lim = args.includes("--limit") ? Number(args[args.indexOf("--limit") + 1]) : Infinity;
+  const work = todo.slice(0, lim);
+  console.log(`${todo.length} matched songs lack an album; doing ${work.length}`);
+  const t0 = Date.now();
+  let done = 0, none = 0, failed = 0, streak = 0, n = 0;
+  for (const e of work) {
+    const s = byId.get(e.songId)!;
+    try {
+      const r = await albumFor(s, e);
+      streak = 0;
+      if (r) { e.album = r.album; e.releaseDate = r.releaseDate; e.albumSource = r.source; e.v = ALBUM_VERSION; done++; }
+      else { none++; console.log(`  - no album: ${s.artist} - ${s.title}`); }
+    } catch (err) {
+      failed++; streak++;
+      console.error(`  ! ${s.artist} - ${s.title}: ${(err as Error).message}`);
+      if (streak >= 3) { console.error("  three failures in a row: pausing 60s"); await sleep(60000); streak = 0; }
+    }
+    if (++n % 25 === 0) { save(store); console.log(`  ${n}/${work.length}  filled ${done}, none ${none}, failed ${failed}  (${Math.round((Date.now() - t0) / 1000)}s)`); }
+  }
+  save(store);
+  console.log(`done. ${done} filled, ${none} no album found, ${failed} failed (both left unchanged; run again to retry). requests ${JSON.stringify(stats.requests)}`);
+}
+
 // ----------------------------------------------------------------------- run
 
 function load(path = OUT): Store {
@@ -406,18 +469,18 @@ async function run(args: string[]) {
   const store = load();
 
   // Old records get their derived fields without a request.
-  for (const e of Object.values(store.songs)) if (e.v !== VERSION && e.confidence === "high") {
+  for (const e of Object.values(store.songs)) if ((e.v ?? 0) < VERSION && e.confidence === "high") {
     e.source = "musicbrainz"; e.yearTier = e.year ? "earliest" : null; e.via = "pilot";
     e.coverSource = e.cover ? "caa" : null;
     finish(e, byId.get(e.songId), spotify.get(e.songId));
   }
   // Families may have been refined since: re-derive them where nothing network-dependent is involved.
-  for (const e of Object.values(store.songs)) if (e.v === VERSION && e.source !== "musicbrainz") {
+  for (const e of Object.values(store.songs)) if ((e.v ?? 0) >= VERSION && e.source !== "musicbrainz") {
     if (e.genreSource === "spotify" || e.genreSource === "title") { e.genres = e.genreSource === "spotify" ? [] : e.genres; e.genreSource = null; }
     finish(e, byId.get(e.songId), spotify.get(e.songId));
   }
   // Pilot records that were not a confident match are looked up again, with the new fallbacks.
-  const todo = pick.filter((s) => !store.songs[s.id] || store.songs[s.id].v !== VERSION);
+  const todo = pick.filter((s) => !store.songs[s.id] || (store.songs[s.id].v ?? 0) < VERSION);
   console.log(`${pick.length} songs chosen of ${songs.length}; ${pick.length - todo.length} already current; ${todo.length} to look up`);
   const artists = new Map<string, any>();
   const t0 = Date.now();
@@ -555,5 +618,6 @@ const invokedDirectly =
   process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
 if (invokedDirectly) {
   if (args.includes("--report")) report(args);
+  else if (args.includes("--fill-album")) fillAlbum(args).catch((e) => { console.error(e); process.exit(1); });
   else run(args).catch((e) => { console.error(e); process.exit(1); });
 }

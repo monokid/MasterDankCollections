@@ -27,7 +27,9 @@ import type { EnrichMap } from "./enrich.ts";
 import { familyColour, familyLabel } from "./families.ts";
 import { legendCounts, nightSounds, type NightSound } from "./timelinesound.ts";
 import { useSessionState } from "./hooks.ts";
+import { milestonesOf, SHAPE, type Milestone, type MilestoneKind, type MilestoneLink, type Shape } from "./milestones.ts";
 import "./timelinesound.css";
+import "./milestones.css";
 
 export interface Trace {
   kind: "song" | "artist" | "person";
@@ -133,6 +135,55 @@ const NightsLayer = memo(function NightsLayer(p: LayerProps) {
   return <>{out}</>;
 });
 
+// -------------------------------------------------------------- milestones
+
+const TICKER_MS = 4500;       // how long a card stays, in playing time
+const TICKER_MAX = 3;
+const ANNOUNCE_MS = 2200;     // screen readers hear at most one batch per this long
+
+/** A milestone's glyph, centred on (cx, cy). The shape tells the kind apart without colour. */
+function Glyph({ shape, kind, cx, cy, r }: { shape: Shape; kind: MilestoneKind; cx: number; cy: number; r: number }) {
+  const cls = `ms-glyph ms-k-${kind}`;
+  switch (shape) {
+    case "circle": return <circle className={cls} cx={cx} cy={cy} r={r} />;
+    case "ring": return <circle className={`${cls} line`} cx={cx} cy={cy} r={r - 0.9} />;
+    case "diamond": return <path className={cls} d={`M${cx} ${cy - r - 1}L${cx + r + 1} ${cy}L${cx} ${cy + r + 1}L${cx - r - 1} ${cy}Z`} />;
+    case "triangle": return <path className={cls} d={`M${cx} ${cy - r}L${cx + r} ${cy + r * 0.8}L${cx - r} ${cy + r * 0.8}Z`} />;
+    case "square": return <rect className={cls} x={cx - r * 0.8} y={cy - r * 0.8} width={r * 1.6} height={r * 1.6} />;
+    case "plus": return <path className={`${cls} line`} d={`M${cx - r} ${cy}H${cx + r}M${cx} ${cy - r}V${cy + r}`} />;
+    case "bar": return <rect className={cls} x={cx - r * 0.45} y={cy - r - 1} width={r * 0.9} height={r * 2 + 2} rx={1} />;
+    case "star": return <path className={cls} d={`M${cx} ${cy - r - 1}L${cx + r * 0.35} ${cy - r * 0.35}L${cx + r + 1} ${cy}L${cx + r * 0.35} ${cy + r * 0.35}L${cx} ${cy + r + 1}L${cx - r * 0.35} ${cy + r * 0.35}L${cx - r - 1} ${cy}L${cx - r * 0.35} ${cy - r * 0.35}Z`} />;
+  }
+}
+const MsIcon = ({ kind, size = 14 }: { kind: MilestoneKind; size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 14 14" aria-hidden="true" className={`ms-k-${kind}`}>
+    <Glyph shape={SHAPE[kind]} kind={kind} cx={7} cy={7} r={4.4} />
+  </svg>
+);
+
+/** One small glyph per milestone night, under the axis. Sits inside the pan group, like the bars. */
+const MilestoneMarks = memo(function MilestoneMarks({ nights, times, byNight, t0, span, plotW, z, lo, hi, axisY, upTo }: {
+  nights: Event[]; times: number[]; byNight: Map<string, Milestone[]>;
+  t0: number; span: number; plotW: number; z: number; lo: number; hi: number; axisY: number; upTo: number | null;
+}) {
+  const out: React.ReactElement[] = [];
+  for (let i = 0; i < nights.length; i++) {
+    const ms = byNight.get(nights[i].id);
+    if (!ms || times[i] < lo || times[i] > hi || (upTo !== null && i >= upTo)) continue;
+    const x = GUTTER + ((times[i] - t0) / span) * plotW * z;
+    const label = `${nights[i].date}: ${ms.map((m) => m.text).join("; ")}`;
+    out.push(
+      <g key={nights[i].id} data-n={nights[i].id} className="ms-mark" role="img" aria-label={label}>
+        <title>{label}</title>
+        <circle cx={x} cy={axisY + 9} r={8} fill="transparent" />
+        <Glyph shape={SHAPE[ms[0].kind]} kind={ms[0].kind} cx={x} cy={axisY + 9} r={4} />
+        {ms.length > 1 && <Glyph shape={SHAPE[ms[1].kind]} kind={ms[1].kind} cx={x + 8} cy={axisY + 9} r={2.6} />}
+      </g>,
+    );
+  }
+  return <>{out}</>;
+});
+
 /** The overview strip's bars: static unless the trace changes. */
 const MiniBars = memo(function MiniBars({ nights, times, t0, span, plotW, longest, trace, sounds, highlight }: {
   nights: Event[]; times: number[]; t0: number; span: number; plotW: number; longest: number; trace: Trace | null;
@@ -157,7 +208,7 @@ const MiniBars = memo(function MiniBars({ nights, times, t0, span, plotW, longes
 // --------------------------------------------------------------- component
 
 export default function Timeline({
-  cat, trace, onClearTrace, selected, onSelect, range, onRange, onInsights, enrich = null,
+  cat, trace, onClearTrace, selected, onSelect, range, onRange, onInsights, enrich = null, onMilestoneLink,
 }: {
   cat: Catalog;
   trace: Trace | null;
@@ -169,6 +220,8 @@ export default function Timeline({
   onInsights: () => void;
   /** Genre and year per song; absent until the vault has opened, and partial. */
   enrich?: EnrichMap | null;
+  /** Open the person, artist or song a milestone is about. Without it, milestone rows have no such link. */
+  onMilestoneLink?: (link: MilestoneLink) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(1100);
@@ -506,6 +559,76 @@ export default function Timeline({
   const upTo = playhead === null ? null : countUpTo(times, playhead);
   const now = playhead === null ? null : at[(upTo ?? 0) - 1] ?? { nights: 0, songs: 0, canon: 0, people: 0 };
 
+  // ------------------------------------------------------------ milestones
+  // Computed over the whole library (never the range or the zoom): see src/milestones.ts.
+  const allMs = useMemo(() => milestonesOf(cat), [cat]);
+  const msByNight = useMemo(() => {
+    const m = new Map<string, Milestone[]>();
+    for (const x of allMs) { const l = m.get(x.eventId); if (l) l.push(x); else m.set(x.eventId, [x]); }
+    return m;
+  }, [allMs]);
+  const nightIdx = useMemo(() => new Map(nights.map((n, i) => [n.id, i])), [nights]);
+  const reduced = useMemo(() => prefersReduced(), []);
+  const [msOpen, setMsOpen] = useSessionState<boolean>("timeline.milestonesOpen", true);
+  const [ticker, setTicker] = useState<{ m: Milestone; born: number }[]>([]);
+  const clock = useRef(0);                       // playing time, ms: stands still while paused
+  const lastUp = useRef(0);
+  const [announce, setAnnounce] = useState("");
+  const pending = useRef<string[]>([]);
+  const announceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const atEnd = playhead !== null && playhead >= t0 + span - 1;
+  const tickerRuns = playing || atEnd;
+
+  // Nights the playhead has just passed bring their milestones onto the ticker.
+  useEffect(() => {
+    if (upTo === null) { lastUp.current = 0; setTicker([]); return; }
+    const from = lastUp.current;
+    lastUp.current = upTo;
+    if (upTo < from) { setTicker([]); return; }
+    if (upTo === from) return;
+    const fresh: Milestone[] = [];
+    for (let i = upTo - 1; i >= from; i--) fresh.push(...(msByNight.get(nights[i]?.id) ?? []));
+    if (!fresh.length) return;
+    if (!reduced) setTicker((old) => [...fresh.map((m) => ({ m, born: clock.current })), ...old].slice(0, TICKER_MAX));
+    // Screen readers: batch what arrived, at most one announcement per ANNOUNCE_MS.
+    pending.current.push(...fresh.slice().reverse().map((m) => `${m.date.slice(0, 4)}, ${m.text}`));
+    if (!announceTimer.current) {
+      announceTimer.current = setTimeout(() => {
+        announceTimer.current = null;
+        const p = pending.current; pending.current = [];
+        if (p.length) setAnnounce(p.slice(0, 2).join(". ") + (p.length > 2 ? `. And ${p.length - 2} more.` : "."));
+      }, ANNOUNCE_MS);
+    }
+  }, [upTo, msByNight, nights, reduced]);
+  useEffect(() => () => { if (announceTimer.current) clearTimeout(announceTimer.current); }, []);
+
+  // Cards fade after TICKER_MS of playing time; pausing stops the clock, so they wait.
+  useEffect(() => {
+    if (!tickerRuns || reduced) return;
+    const id = setInterval(() => {
+      clock.current += 200;
+      setTicker((old) => {
+        const keep = old.filter((t) => clock.current - t.born < TICKER_MS);
+        return keep.length === old.length ? old : keep;
+      });
+    }, 200);
+    return () => clearInterval(id);
+  }, [tickerRuns, reduced]);
+
+  const shownMs = useMemo(
+    () => (upTo === null ? allMs : allMs.filter((m) => (nightIdx.get(m.eventId) ?? 0) < upTo)),
+    [allMs, nightIdx, upTo]);
+  const msYears = useMemo(() => {
+    const g: { year: string; items: Milestone[] }[] = [];
+    for (const m of shownMs) {
+      const y = m.date.slice(0, 4);
+      if (!g.length || g[g.length - 1].year !== y) g.push({ year: y, items: [] });
+      g[g.length - 1].items.push(m);
+    }
+    return g;
+  }, [shownMs]);
+  const jumpTo = (id: string) => { onSelect(id); revealNight(id); };
+
   const years = useMemo(() => {
     const a = new Date(t0).getUTCFullYear(), b = new Date(t0 + span).getUTCFullYear();
     const all: number[] = [];
@@ -711,6 +834,9 @@ export default function Timeline({
                   barW={barW} barsH={barsH} axisY={axisY} lanesY={lanesY} longest={longest}
                   trace={trace} selected={selected} inRange={inRangeSet} upTo={upTo}
                   stagger={!settled} sounds={sounds} highlight={highlight} />
+                <MilestoneMarks
+                  nights={nights} times={times} byNight={msByNight} t0={t0} span={span} plotW={plotW}
+                  z={view.z} lo={lo} hi={hi} axisY={axisY} upTo={upTo} />
               </g>
 
               {playhead !== null && (() => {
@@ -725,6 +851,18 @@ export default function Timeline({
             </g>
           </g>
         </svg>
+
+        {playhead !== null && ticker.length > 0 && (
+          <div className={`ms-ticker${tickerRuns ? "" : " paused"}`} aria-hidden="true"
+            style={{ left: clamp(xOf(playhead) + 14, GUTTER + 8, Math.max(width - 250, GUTTER + 8)) }}>
+            {ticker.map(({ m }) => (
+              <div key={m.id} className={`ms-card ms-k-${m.kind}`}>
+                <MsIcon kind={m.kind} />
+                <span><b>{m.text}</b>{m.detail && <span className="ms-sub">{m.detail}</span>}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {hovered && (
           <div className="tl-tip" style={{
@@ -789,9 +927,56 @@ export default function Timeline({
         <b>Drag</b> to pan · <b>scroll</b> or <b>+ −</b> to zoom · <b>shift-drag</b> selects a range ·
         {" "}<b>← →</b> step through nights (click the chart first) · <b>space</b> plays · <b>0</b> resets · <b>esc</b> clears
       </p>
+      <section className="ms-panel" aria-labelledby="ms-title">
+        <h3 className="ms-title" id="ms-title">
+          <button className="ms-toggle" aria-expanded={msOpen} aria-controls="ms-body"
+            onClick={() => setMsOpen(!msOpen)}>
+            <span className="ms-caret" aria-hidden="true">▶</span>
+            Milestones
+            <span className="ms-count">
+              {upTo === null ? allMs.length : `${shownMs.length} of ${allMs.length} so far`}
+            </span>
+          </button>
+        </h3>
+        {msOpen && (
+          <div className="ms-body" id="ms-body">
+            {msYears.length === 0 && (
+              <p className="ms-empty">{allMs.length ? "None yet. They appear as the playhead passes each night." : "No milestones in this library."}</p>
+            )}
+            {msYears.map((g) => (
+              <div key={g.year}>
+                <div className="ms-year" role="presentation">{g.year}</div>
+                <ul className="ms-list" aria-label={`Milestones in ${g.year}`}>
+                  {g.items.map((m) => {
+                    const lk = m.link && m.link.type !== "night" && onMilestoneLink ? m.link : null;
+                    return (
+                      <li key={m.id} className={`ms-item ms-k-${m.kind}`}>
+                        <button className="ms-row" onClick={() => jumpTo(m.eventId)}
+                          title="Show this night on the timeline">
+                          <MsIcon kind={m.kind} />
+                          <span className="ms-date">{m.date}</span>
+                          <span><span className="ms-text">{m.text}</span>
+                            {m.detail && <span className="ms-detail"> · {m.detail}</span>}</span>
+                        </button>
+                        {lk && (
+                          <button className="ms-link" onClick={() => onMilestoneLink!(lk)}
+                            aria-label={`Open ${lk.type}: ${m.text}`}>
+                            {lk.type === "person" ? "person" : lk.type === "artist" ? "artist" : "song"} →
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
       <span className="tl-sr" aria-live="polite">
         {selectedNight ? `Selected ${selectedNight.date}${selectedNight.title ? `, ${selectedNight.title}` : ""}${selectedSound}` : ""}
       </span>
+      <span className="tl-sr" aria-live="polite" role="status">{announce}</span>
     </div>
   );
 }

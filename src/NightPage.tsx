@@ -1,11 +1,11 @@
 /** One night, in full: a sticky bar to move between nights and jump between
  *  people, the night's totals and sky, then each person's set with the numbers
  *  that say how their phases divide their time. */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { Catalog, Event, Track } from "./catalog.ts";
 import { TYPE_COLOUR, personColour } from "./colours.ts";
 import { nightStats, type PersonStat } from "./nightstats.ts";
-import { byPlayOrder, TrackRow } from "./rows.tsx";
+import { byPlayOrder, Flags } from "./rows.tsx";
 import Sky from "./Sky.tsx";
 import type { WeatherMap } from "./weather.ts";
 import { fmtCount, fmtDate as short, fmtDateLong as long, fmtHours, fmtSpan, pct, plural } from "./format.ts";
@@ -14,9 +14,18 @@ import { useToast } from "./Toast.tsx";
 import { ChevronIcon, CopyIcon } from "./icons.tsx";
 import { coverageLine, factLines, soundOf, worthShowing, type Sound } from "./nightsound.ts";
 import { familyColour, familyLabel } from "./families.ts";
-import type { EnrichMap } from "./enrich.ts";
+import { coverUrlOf, type EnrichMap } from "./enrich.ts";
+import Cover from "./Cover.tsx";
+import SongLinks, { CellText } from "./SongLinks.tsx";
+import ColumnsMenu, { useColumnChoice, useViewportWidth } from "./ColumnsMenu.tsx";
+import { gridTemplate, songFactsFor, sortRows, visibleColumns, type Column } from "./songcols.ts";
+import { nightColumns, rowView } from "./nightlist.ts";
+import { useSessionState } from "./hooks.ts";
+import { fmtClock, MAPPING_RULE, simText, simulateNight, type Sim, type SimBlock, type SimRow } from "./nightsim.ts";
 import "./pages.css";
 import "./nightsound.css";
+import "./nightlist.css";
+import "./nightsim.css";
 
 const hue = (id: string, salt: number) => {
   let h = salt;
@@ -106,6 +115,118 @@ function SoundCard({ sound, onOpen }: { sound: Sound; onOpen: (t: Track) => void
   );
 }
 
+/** One track of a playlist, laid out on the shared column grid. The links sit beside
+ *  the row, not inside it: an anchor in a button is invalid. */
+const NightRow = memo(function NightRow({ track, cat, enrich, cols, twin, onOpen, sim, who }: {
+  track: Track; cat: Catalog; enrich: EnrichMap | null; cols: Column<Track>[]; twin?: Track;
+  onOpen: (t: Track) => void;
+  /** Only in the simulated night: where the row falls on the running clock, and who played it. */
+  sim?: SimRow; who?: Who;
+}) {
+  const info = songFactsFor(cat, enrich, track);
+  const view = rowView(track, info, twin);
+  const cell = (c: Column<Track>) => {
+    switch (c.id) {
+      case "cover":
+        return <Cover songId={info.songId ?? track.id} title={info.title} url={coverUrlOf(info.songId ? enrich?.[info.songId] : undefined)} size={36} />;
+      case "links":
+        return null;
+      case "clock":
+        return sim && sim.startSec !== null
+          ? <span title={sim.startApprox ? "Elapsed time at the start; approximate, an earlier song has no known length" : "Elapsed time at the start"}>
+              {sim.startApprox ? "~" : ""}{fmtClock(sim.startSec)}
+            </span>
+          : <CellText value={null} />;
+      case "person":
+        return who
+          ? <span className="sim-who" style={{ ["--pc" as string]: who.colour }} title={who.name}><i />{who.name}</span>
+          : null;
+      case "duration":
+        return sim?.estimated
+          ? <span className="sim-est" title="Length unknown: the night's median stands in">~{fmtClock(sim.durSec)}</span>
+          : <CellText value={c.text(track)} title={c.title?.(track)} />;
+      case "title":
+        return (
+          <>
+            {info.title}
+            {track.variant && <span className="chip variant">{track.variant}</span>}
+            {info.nights > 1 && <span className="chip recurs" title={`Played on ${info.nights} nights`}>×{info.nights}</span>}
+            <Flags track={track} />
+          </>
+        );
+      case "artist":
+        return view.twinHint
+          ? <span className="twinhint" title="its named twin">{view.twinHint}</span>
+          : <CellText value={c.text(track)} />;
+      default:
+        return <CellText value={c.text(track)} title={c.title?.(track)} />;
+    }
+  };
+  return (
+    <div className="sc-rowwrap">
+      <button className="row" onClick={() => onOpen(track)}>
+        {cols.map((c) => (
+          <div key={c.id} className={`sc-c sc-${c.id}${c.align === "right" ? " r" : ""}`}>{cell(c)}</div>
+        ))}
+      </button>
+      {view.linkable && cols.some((c) => c.id === "links") && <SongLinks song={view.linkSource} className="sc-links" />}
+    </div>
+  );
+});
+
+interface Who { name: string; colour: string }
+
+const blockTitle = (b: SimBlock) =>
+  b.kind === "loose" ? "Not in a phase: played at an unknown time"
+  : b.kind === "whole" ? "Whole night"
+  : b.labels.join(" / ") || "Phase";
+
+/** The simulated night's columns: the clock replaces the play number, and a "Who" column follows the artist. */
+function simColumns(base: Column<Track>[]): Column<Track>[] {
+  const clock: Column<Track> = { id: "clock", label: "Time", width: "56px", align: "right", sortKey: null, locked: true, text: () => null };
+  const person: Column<Track> = { id: "person", label: "Who", width: "minmax(0,0.7fr)", align: "left", sortKey: null, text: () => null };
+  const out: Column<Track>[] = [];
+  for (const c of base) {
+    if (c.id === "order") out.push(clock);
+    else { out.push(c); if (c.id === "artist") out.push(person); }
+  }
+  return out;
+}
+
+/** One plausible running order, block by block. Memoised: a reshuffle rebuilds it, nothing else does. */
+const SimList = memo(function SimList({ sim, cat, enrich, cols, whoOf, onOpen }: {
+  sim: Sim; cat: Catalog; enrich: EnrichMap | null; cols: Column<Track>[];
+  whoOf: (pid: string) => Who; onOpen: (t: Track) => void;
+}) {
+  return (
+    <>
+      {sim.blocks.map((b) => (
+        <section key={b.key} className={`sim-block ${b.kind}`}>
+          <div className="phasehead sim-head">
+            <span className={`name${b.kind === "loose" ? " dimname" : ""}`}>{blockTitle(b)}</span>
+            <span className="meta">
+              {plural(b.rows.length, "song")} · {fmtClock(b.seconds)}
+              {b.estimatedRows > 0 ? ` (${b.estimatedRows} ~)` : ""}
+            </span>
+            <span className="sim-contrib">
+              {b.personIds.map((pid) => {
+                const w = whoOf(pid);
+                return <span key={pid} className="sim-who" style={{ ["--pc" as string]: w.colour }}><i />{w.name}</span>;
+              })}
+            </span>
+          </div>
+          <div className="rows">
+            {b.rows.map((r) => (
+              <NightRow key={r.track.id} track={r.track} cat={cat} enrich={enrich} cols={cols} onOpen={onOpen}
+                sim={r} who={whoOf(r.track.personId ?? "")} />
+            ))}
+          </div>
+        </section>
+      ))}
+    </>
+  );
+});
+
 /** Where each night was scrolled to, so coming back from a track lands there. */
 const scrollMemory = new Map<string, number>();
 
@@ -124,6 +245,35 @@ export default function NightPage({ cat, ev, weather, enrich = null, onBack, onG
   // People whose set is folded away. CSS does the hiding, so a print still has every set.
   const [folded, setFolded] = useState<Set<string>>(() => new Set());
   const { toast, node: toastNode } = useToast();
+  const [colSort, setColSort] = useSessionState<{ id: string; dir: "asc" | "desc" } | null>("night.colsort", null);
+  const [choice, toggleCol, resetCols] = useColumnChoice("night");
+  const width = useViewportWidth();
+  const [view, setView] = useSessionState<"person" | "sim">("night.view", "person");
+  const [seeds, setSeeds] = useSessionState<Record<string, number>>("night.simseed", {});
+  const [simChoice, toggleSimCol, resetSimCols] = useColumnChoice("night-sim");
+  const seed = seeds[ev.id] ?? 1;
+  const pendingJump = useRef<string | null>(null);
+  const [barH, setBarH] = useState(96);
+  const allCols = useMemo(() => nightColumns((t) => songFactsFor(cat, enrich, t)), [cat, enrich]);
+  const cols = useMemo(() => visibleColumns(allCols, choice, width), [allCols, choice, width]);
+  const simAll = useMemo(() => simColumns(allCols), [allCols]);
+  const simCols = useMemo(() => visibleColumns(simAll, simChoice, width), [simAll, simChoice, width]);
+  const sortCol = colSort ? cols.find((c) => c.id === colSort.id && c.sortKey) : undefined;
+  const clickHeader = (c: Column<Track>) => {
+    if (!c.sortKey) return;
+    if (colSort?.id !== c.id) setColSort({ id: c.id, dir: "asc" });
+    else if (colSort.dir === "asc") setColSort({ id: c.id, dir: "desc" });
+    else setColSort(null);
+  };
+
+  // The column header sticks just under the night bar, whatever height that wraps to.
+  useLayoutEffect(() => {
+    const el = barRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setBarH(Math.round(el.getBoundingClientRect().height)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const trackById = useMemo(() => new Map(cat.tracks.map((t) => [t.id, t])), [cat]);
   const dated = useMemo(
@@ -178,6 +328,18 @@ export default function NightPage({ cat, ev, weather, enrich = null, onBack, onG
     }
     return m;
   }, [sets, enrich, showSound]);
+
+  const sim = useMemo(
+    () => view === "sim"
+      ? simulateNight(ev.id, cat.tracks.filter((t) => t.eventId === ev.id), cat.phases.filter((p) => p.eventId === ev.id), seed)
+      : null,
+    [view, cat, ev.id, seed]);
+  const whoMap = useMemo(() => {
+    const m = new Map<string, Who>();
+    for (const x of sets) m.set(x.pid, { name: x.person?.name ?? (x.stat.label || "Shared"), colour: x.colour });
+    return m;
+  }, [sets]);
+  const whoOf = useCallback((pid: string) => whoMap.get(pid) ?? { name: "Shared", colour: "var(--ink-faint)" }, [whoMap]);
 
   // A new night starts at the top. The first one shown is the exception: coming
   // back from a track, the page returns to where it was.
@@ -242,6 +404,8 @@ export default function NightPage({ cat, ev, weather, enrich = null, onBack, onG
   }, [prev, next, onGoto, back]);
 
   const jump = (pid: string) => {
+    // The sections only exist in the per-person view: switch, then jump once they are drawn.
+    if (view !== "person") { pendingJump.current = pid; setView("person"); return; }
     const root = barRef.current?.closest(".scroll") as HTMLElement | null;
     const sec = root?.querySelector<HTMLElement>(`[data-person="${pid}"]`);
     if (!root || !sec) return;
@@ -249,6 +413,23 @@ export default function NightPage({ cat, ev, weather, enrich = null, onBack, onG
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     root.scrollTo({ top: top - (barRef.current?.offsetHeight ?? 0) - 8, behavior: reduced ? "auto" : "smooth" });
     setActive(pid);
+  };
+
+  useEffect(() => {
+    if (view === "person" && pendingJump.current) { const pid = pendingJump.current; pendingJump.current = null; jump(pid); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
+  const reshuffle = () => setSeeds((m) => {
+    const cur = m[ev.id] ?? 1;
+    let n = 1 + Math.floor(Math.random() * 9999);
+    if (n === cur) n = n % 9999 + 1;
+    return { ...m, [ev.id]: n };
+  });
+  const copySim = async () => {
+    if (!sim) return;
+    const ok = await copyText(simText(sim, (pid) => whoOf(pid ?? "").name, blockTitle));
+    toast(ok ? `Copied the simulated setlist (${plural(sim.songs, "song")})` : "Could not copy to the clipboard");
   };
 
   const allFolded = sets.length > 0 && folded.size === sets.length;
@@ -261,6 +442,32 @@ export default function NightPage({ cat, ev, weather, enrich = null, onBack, onG
     const ok = await copyText(setlistText(list));
     toast(ok ? `Copied ${plural(list.length, "line")} from ${name}'s set` : "Could not copy to the clipboard");
   };
+
+  // Sorting is off by default (play order). A header click sorts within each list, never across them.
+  const rowsOf = (xs: Track[], withTwin = false) =>
+    (sortCol && colSort ? sortRows(xs, sortCol.sortKey!, colSort.dir) : xs).map((t) => (
+      <NightRow key={t.id} track={t} cat={cat} enrich={enrich} cols={cols} onOpen={onOpen}
+        twin={withTwin && t.twinId ? trackById.get(t.twinId) : undefined} />
+    ));
+
+  const head = (use: Column<Track>[], sortable: boolean) => (
+    <div className="sc-head" role="row">
+      {use.map((c) => {
+        const on = sortable && colSort?.id === c.id ? colSort.dir : null;
+        return (
+          <div key={c.id} role="columnheader" className={`sc-h${c.align === "right" ? " r" : ""}`}
+            aria-sort={sortable && c.sortKey ? (on === "asc" ? "ascending" : on === "desc" ? "descending" : "none") : undefined}>
+            {sortable && c.sortKey ? (
+              <button type="button" className={`sc-hb${on ? " on" : ""}`} onClick={() => clickHeader(c)}
+                title={`Sort by ${c.label.toLowerCase()}`}>
+                {c.label}<span className="sc-arrow" aria-hidden="true">{on === "asc" ? "▲" : on === "desc" ? "▼" : ""}</span>
+              </button>
+            ) : c.id === "cover" || c.id === "links" ? <span className="sc-sr">{c.label}</span> : c.label}
+          </div>
+        );
+      })}
+    </div>
+  );
 
   const isNight = ev.kind !== "collection";
   const kinds = ev.types.length ? ev.types : ev.type ? [ev.type] : [];
@@ -339,7 +546,54 @@ export default function NightPage({ cat, ev, weather, enrich = null, onBack, onG
 
         {showSound && <SoundCard sound={sound} onOpen={onOpen} />}
 
-        {sets.map(({ pid, stat, colour, person, others, split }) => {
+        {sets.length > 0 && (
+          <div className="nl-area sc-list"
+            style={{ "--cols": gridTemplate(view === "sim" ? simCols : cols), "--sc-top": `${barH}px` } as CSSProperties}>
+            <div className="sim-seg" role="group" aria-label="How to lay out the playlist">
+              <button type="button" aria-pressed={view === "person"} onClick={() => setView("person")}>Per person</button>
+              <button type="button" aria-pressed={view === "sim"} onClick={() => setView("sim")}
+                title="Everyone's songs as one running playlist: one plausible order of the night">Simulated night</button>
+            </div>
+            <div className="nl-tools">
+              {view === "sim"
+                ? <span>The Time column is the elapsed time when each song starts.</span>
+                : <span>Click a heading to sort within each list; again to reverse, once more for play order.</span>}
+              {view === "sim"
+                ? <ColumnsMenu columns={simAll} choice={simChoice} onToggle={toggleSimCol} onReset={resetSimCols} />
+                : <ColumnsMenu columns={allCols} choice={choice} onToggle={toggleCol} onReset={resetCols} />}
+            </div>
+            {sim && (
+              <div className="sim-note">
+                <p className="sim-lead">
+                  <b>A simulation:</b> within each phase the real order was random, so this is one plausible version of the night.
+                </p>
+                <p>
+                  Simulated length <b>{fmtSpan(sim.totalSeconds)}</b> · recorded night length <b>{fmtSpan(ev.durationSec)}</b>
+                  {sim.estimatedRows > 0 && ` · ${plural(sim.estimatedRows, "song")} with no known length counted at the median ${fmtClock(sim.medianSec)} (marked ~)`}
+                </p>
+                {sim.phased ? (
+                  <p>
+                    {MAPPING_RULE}
+                    {sim.looseSongs > 0 && ` Phases do not cover the whole night: ${plural(sim.looseSongs, "song")} (${fmtSpan(sim.looseSeconds)}) sit in no phase, so they have no place on the clock and come last.`}
+                  </p>
+                ) : sim.songs > 0 && (
+                  <p>Phases were not recorded for this night, so everyone's songs are shuffled together as one block.</p>
+                )}
+                <div className="sim-actions">
+                  <button className="copybtn" onClick={reshuffle} title="Pick another random order">Reshuffle</button>
+                  <span className="sim-seed" title="The same night with the same number always opens in the same order">shuffle #{sim.seed}</span>
+                  <button className="copybtn" onClick={() => void copySim()} disabled={!sim.songs}
+                    title="Copy the simulated order as plain text, with the running clock">
+                    <CopyIcon size={14} /> Copy simulated setlist
+                  </button>
+                </div>
+              </div>
+            )}
+            {head(view === "sim" ? simCols : cols, view === "person")}
+        {sim && (sim.blocks.length
+          ? <SimList sim={sim} cat={cat} enrich={enrich} cols={simCols} whoOf={whoOf} onOpen={onOpen} />
+          : <p className="sim-empty">No song of this night is counted as played, so there is nothing to simulate.</p>)}
+        {view === "person" && sets.map(({ pid, stat, colour, person, others, split }) => {
           const loose = split.loose;
           const named = person?.name ?? (stat.label || "Shared");
           const key = pid || "none";
@@ -421,9 +675,7 @@ export default function NightPage({ cat, ev, weather, enrich = null, onBack, onG
                       <span className="meta pct">{pct(b.share)}</span>
                     </div>
                     <div className="rows">
-                      {(split.byPhase.get(ph.id) ?? []).map((t) => (
-                        <TrackRow key={t.id} track={t} cat={cat} query="" onOpen={onOpen} />
-                      ))}
+                      {rowsOf(split.byPhase.get(ph.id) ?? [])}
                     </div>
                   </div>
                 );
@@ -438,9 +690,7 @@ export default function NightPage({ cat, ev, weather, enrich = null, onBack, onG
                     </div>
                   )}
                   <div className="rows" style={{ marginTop: stat.phases ? 0 : 8 }}>
-                    {loose.map((t) => (
-                      <TrackRow key={t.id} track={t} cat={cat} query="" onOpen={onOpen} />
-                    ))}
+                    {rowsOf(loose)}
                   </div>
                 </>
               )}
@@ -452,9 +702,7 @@ export default function NightPage({ cat, ev, weather, enrich = null, onBack, onG
                     <span className="meta">{plural(split.unnamed.length, "file")} · only anonymised copies exist</span>
                   </div>
                   <div className="rows">
-                    {split.unnamed.map((t) => (
-                      <TrackRow key={t.id} track={t} cat={cat} query="" onOpen={onOpen} />
-                    ))}
+                    {rowsOf(split.unnamed)}
                   </div>
                 </>
               )}
@@ -466,10 +714,7 @@ export default function NightPage({ cat, ev, weather, enrich = null, onBack, onG
                     {" "}· {plural(others.length, "track")}
                   </summary>
                   <div className="rows">
-                    {others.map((t) => (
-                      <TrackRow key={t.id} track={t} cat={cat} query="" onOpen={onOpen}
-                        twin={t.twinId ? trackById.get(t.twinId) : undefined} />
-                    ))}
+                    {rowsOf(others, true)}
                   </div>
                 </details>
               )}
@@ -477,6 +722,8 @@ export default function NightPage({ cat, ev, weather, enrich = null, onBack, onG
             </section>
           );
         })}
+          </div>
+        )}
       </div>
       {toastNode}
     </div>

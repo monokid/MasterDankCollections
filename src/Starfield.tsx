@@ -7,6 +7,8 @@
  *    4. spores          - small glowing orbs that pulse and wander (the organic bit)
  *    5. ripples         - rings that bloom and fade now and then (the groove)
  *    6. comets          - pixelated ones, thin stray streaks, the odd shower
+ *    7. schools         - flocks of small arrows crossing right to left, swaying as one
+ *                         (the maths is in fishschool.ts; here they are pooled and blitted)
  *
  *  Two rules keep it from fighting the content above it. Everything soft is a
  *  *pre-rendered sprite* drawn with drawImage, so a frame costs a few hundred
@@ -15,6 +17,7 @@
  */
 import { useEffect, useRef } from "react";
 import { createSky } from "./sky";
+import { MAX_PARTICLES, memberPose, newSchool, spawnSchool, type Pose, type School } from "./fishschool";
 
 const TAU = Math.PI * 2;
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
@@ -41,6 +44,30 @@ interface Spore { sprite: number; x: number; y: number; size: number; speed: num
 interface Ring { x: number; y: number; born: number; hue: number; reach: number; life: number }
 interface Comet { x: number; y: number; vx: number; vy: number; hue: number; size: number; spin: number }
 interface Streak { x: number; y: number; vx: number; vy: number; len: number; hue: number; width: number }
+
+const ARROW_W = 44, ARROW_H = 10;
+/** Schools alive at most (MAX_PARTICLES arrows between them). */
+const FISH_SLOTS = 24;
+
+/** One arrow in one hue, head at the right edge: a tapering tail fading to nothing, a bright chevron head. */
+function makeArrow(hue: number): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = ARROW_W; c.height = ARROW_H;
+  const g = c.getContext("2d")!;
+  const tail = g.createLinearGradient(0, 0, ARROW_W, 0);
+  tail.addColorStop(0, `hsla(${hue}, 100%, 70%, 0)`);
+  tail.addColorStop(0.7, `hsla(${hue + 18}, 100%, 74%, 0.55)`);
+  tail.addColorStop(1, "rgba(255, 255, 255, 0.95)");
+  g.fillStyle = tail;
+  g.beginPath();
+  g.moveTo(0, ARROW_H / 2); g.lineTo(ARROW_W - 8, ARROW_H / 2 - 1.6); g.lineTo(ARROW_W - 8, ARROW_H / 2 + 1.6);
+  g.closePath(); g.fill();
+  g.fillStyle = `hsla(${hue + 10}, 100%, 88%, 0.95)`;
+  g.beginPath();
+  g.moveTo(ARROW_W, ARROW_H / 2); g.lineTo(ARROW_W - 13, 0.5); g.lineTo(ARROW_W - 9, ARROW_H / 2); g.lineTo(ARROW_W - 13, ARROW_H - 0.5);
+  g.closePath(); g.fill();
+  return c;
+}
 
 /** A soft round glow in one hue, drawn once. */
 function makeGlow(hue: number, px: number, strength: number): HTMLCanvasElement {
@@ -71,6 +98,7 @@ export default function Starfield() {
     // Sprites, built once.
     const nebula = HUES.map((h) => makeGlow(h, 256, 0.9));
     const orb = HUES.map((h) => makeGlow(h, 64, 1));
+    const arrow = HUES.map((h) => makeArrow(h));
 
     // Colour strings for the stars, built once: [hue index + 1][layer][level].
     const starStyle: string[][][] = [-1, ...HUES.keys()].map((hi) =>
@@ -89,12 +117,16 @@ export default function Starfield() {
     const rings: Ring[] = [];
     const comets: Comet[] = [];
     const streaks: Streak[] = [];
+    // The school pool: records are reused, nothing is allocated after this.
+    const fish = Array.from({ length: FISH_SLOTS }, () => ({ s: newSchool() as School, age: 0, on: false }));
+    const pose: Pose = { x: 0, y: 0, angle: 0 };
+    const calm = reduced ? 0 : 1;      // sideways sway, off under reduced motion
     let sky: CanvasGradient | null = null;
 
     let raf = 0;
     let last = 0;
     let clock = 0;                 // seconds since start, advanced by dt
-    let nextRing = 4, nextComet = 2.2, nextStreak = 0.9, nextShower = 18;
+    let nextRing = 4, nextComet = 2.2, nextStreak = 0.9, nextShower = 18, nextSchool = 1;
     let lite = false;              // flips on if frames get expensive (and back off, with hysteresis)
     let minGap = GAP_FULL;
     let workMs = 0, frames = 0;
@@ -124,6 +156,13 @@ export default function Starfield() {
           hi: Math.random() < 0.18 ? Math.floor(Math.random() * HUES.length) : -1,
         };
       });
+
+      // Schools in flight were laid out for the old size: start a fresh, part-crossed set.
+      for (const f of fish) f.on = false;
+      for (let i = 0; i < 6; i++) {
+        const f = spawnFish();
+        if (f) f.age = Math.random() * f.s.life * 0.85;
+      }
 
       const span = w + 800;
       blobs = Array.from({ length: Math.max(5, Math.round(w / 260)) }, (_, i) => ({
@@ -282,6 +321,39 @@ export default function Starfield() {
       }
     }
 
+    function spawnFish() {
+      const slot = fish.find((f) => !f.on);
+      if (!slot) return null;
+      let used = 0;
+      for (const f of fish) if (f.on) used += f.s.n;
+      if (!spawnSchool(Math.random, w, h, HUES.length, MAX_PARTICLES - used, slot.s)) return null;
+      slot.age = 0; slot.on = true;
+      return slot;
+    }
+
+    function drawSchools(dt: number) {
+      ctx!.globalCompositeOperation = "lighter";
+      const step = lite ? 2 : 1;          // a weak machine draws every other arrow
+      for (const f of fish) {
+        if (!f.on) continue;
+        f.age += dt;
+        const s = f.s;
+        if (f.age >= s.life) { f.on = false; continue; }
+        ctx!.globalAlpha = s.alpha;
+        const img = arrow[s.hue];
+        const k = dpr * s.scale * 0.8;
+        for (let i = 0; i < s.n; i += step) {
+          memberPose(s, i, f.age, calm, pose);
+          if (pose.x < -60 || pose.x > w + 60 || pose.y < -30 || pose.y > h + 30) continue;
+          const c = Math.cos(pose.angle) * k, sn = Math.sin(pose.angle) * k;
+          ctx!.setTransform(c, sn, -sn, c, pose.x * dpr, pose.y * dpr);
+          ctx!.drawImage(img, -ARROW_W, -ARROW_H / 2);
+        }
+      }
+      ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx!.globalAlpha = 1;
+    }
+
     function drawStreaks(dt: number) {
       ctx!.globalCompositeOperation = "lighter";
       ctx!.lineCap = "round";
@@ -370,6 +442,7 @@ export default function Starfield() {
       drawStars(dt);
       drawSpores(dt);
       drawRings();
+      drawSchools(dt);
       skyEvents?.draw(dt);
       drawStreaks(dt);
       drawComets(dt);
@@ -388,7 +461,8 @@ export default function Starfield() {
       skyEvents?.update(dt);
       if ((nextRing -= dt) <= 0) { spawnRing(); nextRing = rand(6, 11); }
       if ((nextComet -= dt) <= 0) { spawnComet(); nextComet = rand(2.6, 6.5); }
-      if ((nextStreak -= dt) <= 0) { spawnStreak(); nextStreak = rand(1.2, 3.8); }
+      if ((nextStreak -= dt) <= 0) { spawnStreak(); nextStreak = rand(3.5, 8); }   // lone fast arrows; most now fly in schools
+      if ((nextSchool -= dt) <= 0) { spawnFish(); nextSchool = rand(2, 5.5); }
       if ((nextShower -= dt) <= 0) { spawnShower(); nextShower = rand(22, 40); }
 
       paint(dt);

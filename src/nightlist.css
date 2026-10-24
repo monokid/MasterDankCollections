@@ -1,0 +1,19 @@
+/* The night playlists: toolbar above the shared column header, and print. */
+.nl-tools {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  margin-top: 26px; font-size: 12.5px; color: var(--ink-faint);
+}
+.nl-area .pset { margin-top: 22px; }
+.nl-area .sc-head { margin-top: 6px; }
+.nl-area .sc-title .chip { margin-left: 6px; }
+
+@media print {
+  .nl-tools { display: none !important; }
+  .nightpage .nl-area .row { display: flex !important; gap: 12pt; }
+  .nightpage .nl-area .sc-c { font-size: inherit; }
+  .nightpage .nl-area .sc-title { flex: 2 1 0; }
+  .nightpage .nl-area .sc-artist { flex: 1 1 0; }
+  .nightpage .nl-area .sc-order, .nightpage .nl-area .sc-duration { flex: none; width: auto; }
+  .nightpage .nl-area .sc-cover, .nightpage .nl-area .sc-album, .nightpage .nl-area .sc-released,
+  .nightpage .nl-area .sc-genre, .nightpage .nl-area .sc-links { display: none !important; }
+}

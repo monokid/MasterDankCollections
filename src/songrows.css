@@ -1,0 +1,57 @@
+/* Song facts and links on the Music page: tile links, the List's columns, the
+   artist page's discography columns. Loaded after music.css so it can refine it.
+   Nothing here may change a tile's or a list row's height: the wall's scroll
+   maths use fixed heights (WallView: tile width + 78, LIST_H 56, LHEAD_H 30). */
+
+/* ----------------------------------------------------------------- tiles */
+
+.mu-tw { position: relative; min-width: 0; height: 100%; }
+.mu-tw > .mu-tile { width: 100%; height: 100%; }
+/* over the cover's top-right corner, out of flow: showing it moves nothing */
+.mu-tlinks {
+  position: absolute; top: 8px; right: 8px; z-index: 4; display: inline-flex; padding: 1px; border-radius: 10px;
+  background: rgba(8, 6, 22, 0.8); opacity: 0; transition: opacity 0.15s;
+}
+.mu-tw:hover .mu-tlinks, .mu-tw:focus-within .mu-tlinks { opacity: 1; }
+@media (hover: none) { .mu-tlinks { opacity: 0.95; } }
+.mu-tlinks .sl-a { width: 26px; height: 26px; opacity: 1; }
+
+/* ------------------------------------------------------------ the List */
+
+.mu-main { min-width: 0; }
+.mu-main .mu-lhead, .mu-ahead { --sc-gap: 12px; box-sizing: border-box; height: 30px; margin: 0; padding: 0 13px; align-items: center; }
+.mu-main .mu-lhead { top: var(--sc-top, 96px); }
+@media (max-height: 560px) { .mu-main .mu-lhead { top: 0; } }
+
+.mu-wall.list .mu-lrow { grid-template-columns: var(--cols); scroll-margin-top: calc(var(--mu-bar, 96px) + 46px); }
+.mu-lwrap { position: relative; min-width: 0; height: 100%; }
+.mu-lwrap > .mu-lrow { width: 100%; height: 100%; box-sizing: border-box; }
+.mu-lrow .sc-c.sc-cover { display: flex; align-items: center; }
+.mu-lrow .sc-c.sc-title { overflow: hidden; }
+.mu-lrow .sc-journey { overflow: visible; }
+.mu-lrow .sc-journey .mu-jdots.small { width: 100%; }
+/* the links column is reserved in the button's grid; the icons sit over it, outside the button */
+.mu-llinks { position: absolute; right: 13px; top: 50%; transform: translateY(-50%); }
+.mu-lwrap .sl-a { opacity: 0.6; }
+.mu-lwrap:hover .sl-a, .mu-lwrap:focus-within .sl-a { opacity: 1; }
+/* the old fixed-column breakpoints are replaced by the column set */
+@media (max-width: 760px) { .mu-wall.list .mu-lrow { grid-template-columns: var(--cols); } }
+@media (max-width: 520px) { .mu-wall.list .mu-lrow { grid-template-columns: var(--cols); } }
+
+/* ----------------------------------------------------- artist discography */
+
+.mu-dtools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.mu-ahead { margin-bottom: 4px; top: var(--sc-top, 0px); }
+.sc-head .sc-h.mu-axish { overflow: visible; }
+.mu-ahead .mu-axisbar { display: block; position: relative; height: 14px; text-transform: none; letter-spacing: 0; font-size: 10.5px; }
+.mu-disco { --sc-gap: 12px; }
+.mu-disco .mu-drow { grid-template-columns: var(--cols); gap: var(--sc-gap); }
+.mu-disco .mu-drow > * { grid-column: auto; }
+.mu-drow .sc-c.mu-dmain { display: flex; overflow: visible; white-space: normal; color: inherit; font-size: inherit; }
+.mu-drow .mu-dwhen { min-width: 0; }
+.mu-drow .mu-dwhen > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mu-drow .mu-dwho { min-width: 0; }
+.mu-drow .sc-links { overflow: visible; }
+/* above the title button's whole-row click layer */
+.mu-drow .sl { position: relative; z-index: 2; }
+.mu-drow:hover .sl-a, .mu-drow:focus-within .sl-a { opacity: 1; }

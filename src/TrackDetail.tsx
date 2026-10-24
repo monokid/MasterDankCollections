@@ -6,8 +6,11 @@ import Cover from "./Cover.tsx";
 import { coverUrlOf, type EnrichMap } from "./enrich.ts";
 import { familyColour } from "./families.ts";
 import { buildWall } from "./musicstats.ts";
+import SongLinks, { CellText, SpotifyIcon, YouTubeIcon } from "./SongLinks.tsx";
+import { fmtDuration, songFactsFor, spotifyHref, youtubeHref } from "./songcols.ts";
+import { aboutRows } from "./songabout.ts";
 import {
-  gapSentence, hasFacts, moreFromArtist, neighbours, notFoundLine, poolOf, sourceNote, songFacts,
+  gapSentence, moreFromArtist, neighbours, notFoundLine, poolOf, sourceNote, songFacts,
   type PoolSong,
 } from "./songfacts.ts";
 import { fmtDur } from "./format.ts";
@@ -150,21 +153,29 @@ export default function TrackDetail({ track, cat, enrich = null, onClose, onTrac
         const t = openable.get(s.songId);
         if (!t) return null;
         const f = enrich?.[s.songId];
+        const si = songFactsFor(cat, enrich, s.songId);
         return (
-          <li key={s.songId}>
+          <li key={s.songId} className="dt-simwrap">
             {trackLink(t.id, (
               <>
                 <Cover songId={s.songId} title={s.title} artist={s.artist} url={coverUrlOf(f)} size={40} />
                 <span className="dt-simtext"><b>{s.title}</b><span>{s.artist || "unknown artist"}</span></span>
+                <span className="dt-simdur"><CellText value={fmtDuration(si.durationSec)} /></span>
+                <span className="dt-simyr"><CellText value={si.year ? String(si.year) : null}
+                  title={si.releaseDate ? `Released ${si.releaseDate}` : undefined} /></span>
                 <span className="dt-simn">×{s.nights} {s.nights === 1 ? "night" : "nights"}</span>
               </>
             ), "dt-simrow")}
+            <SongLinks song={si} className="dt-simlinks" />
           </li>
         );
       })}
     </ul>
   );
   const spot = spotifyUrl(track.spotifyUri);
+  const info = songFactsFor(cat, enrich, track);
+  const about = aboutRows(info, facts.country);
+  const spLink = spotifyHref(info), ytLink = youtubeHref(info);
   const q = track.audio;
 
   return (
@@ -192,15 +203,7 @@ export default function TrackDetail({ track, cat, enrich = null, onClose, onTrac
           {person && <span className="dt-by"> · brought by {personLink(person.name)}</span>}
         </p>
 
-        {hasFacts(facts) ? (
-          <p className="dt-factsline">
-            {facts.year !== null && <span>released {facts.year}</span>}
-            {facts.family && (
-              <span><i className="dt-fam" style={{ background: familyColour(facts.family) }} />{facts.familyName}</span>
-            )}
-            {facts.country && <span>{facts.country}</span>}
-          </p>
-        ) : notFound && <p className="dt-quiet">{notFound}</p>}
+        {notFound && <p className="dt-quiet">{notFound}</p>}
           </div>
         </div>
 
@@ -229,10 +232,38 @@ export default function TrackDetail({ track, cat, enrich = null, onClose, onTrac
         <div className="dt-actions">
           {played && <button className="dt-btn" onClick={traceSong}>Show on timeline</button>}
           {sh && <button className="dt-btn" onClick={copySummary}>Copy summary</button>}
-          {spot && <a className="dt-btn" href={spot} target="_blank" rel="noreferrer">Open in Spotify ↗</a>}
         </div>
+        <div className="dt-actions dt-outlinks">
+          <a className={`dt-btn dt-outbtn dt-sp${spLink.exact ? " exact" : ""}`} href={spLink.href} target="_blank" rel="noopener noreferrer">
+            <SpotifyIcon size={16} />{spLink.exact ? "Open in Spotify" : "Search on Spotify"}
+          </a>
+          <a className="dt-btn dt-outbtn dt-yt" href={ytLink.href} target="_blank" rel="noopener noreferrer">
+            <YouTubeIcon size={16} />Search on YouTube
+          </a>
+        </div>
+        <p className="dt-quiet dt-linknote">Opens in a new tab. Nothing is sent until you click.</p>
         {srcNote && <p className="dt-quiet">{srcNote}</p>}
       </header>
+
+      <section className="panel dt-card dt-about" aria-labelledby="dt-about">
+        <h2 id="dt-about">About this song</h2>
+        <dl>
+          {about.map((r) => (
+            <div key={r.key} className="dt-aboutrow">
+              <dt>{r.label}</dt>
+              <dd>
+                {r.key === "artist" && hasArtistPage ? artistLink(r.text) : r.text}
+                {r.key === "genre" && facts.family && (
+                  <i className="dt-fam" style={{ background: familyColour(facts.family) }} aria-hidden="true" />
+                )}
+                {r.chips && r.chips.length > 0 && (
+                  <span className="dt-tags">{r.chips.map((g) => <span key={g} className="dt-tag">{g}</span>)}</span>
+                )}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </section>
 
       {sh && !played && (
         <section className="panel dt-card dt-shelf" aria-label="History">
@@ -394,14 +425,6 @@ export default function TrackDetail({ track, cat, enrich = null, onClose, onTrac
                   {ah.last.nightPeople.length ? ` (${joinNames(ah.last.nightPeople)})` : ""}
                 </p>
               )}
-              <ul className="dt-songs">
-                {ah.songs.filter((s) => s.songId !== sid).slice(0, 6).map((s) => (
-                  <li key={s.songId}>
-                    {trackLink(s.trackId, s.title, "dt-link")}
-                    <span className="dt-faint">{s.nights} {s.nights === 1 ? "night" : "nights"}, last {monthYear(s.last)}</span>
-                  </li>
-                ))}
-              </ul>
               <p className="dt-note">
                 {ah.songCount} songs brought in all.{" "}
                 <button className="dt-linkbtn" onClick={traceArtist}>Show {ah.name} on the timeline →</button>

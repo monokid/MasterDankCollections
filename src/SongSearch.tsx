@@ -13,7 +13,7 @@
  */
 import {
   memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState,
-  type KeyboardEvent,
+  type CSSProperties, type KeyboardEvent,
 } from "react";
 import type { Catalog, Track } from "./catalog.ts";
 import type { Trace } from "./Timeline.tsx";
@@ -30,9 +30,15 @@ import {
   consumeFocusRequest, FOCUS_SEARCH_EVENT, getSearchQuery, setSearchQuery, subscribeSearchQuery,
 } from "./events.ts";
 import { useToast } from "./Toast.tsx";
-import EnrichChips, { Thumb } from "./EnrichChips.tsx";
-import { coverUrlOf, familyOf, yearOf, type EnrichMap } from "./enrich.ts";
-import { familyColour, familyLabel } from "./families.ts";
+import EnrichChips from "./EnrichChips.tsx";
+import { coverUrlOf, type EnrichMap } from "./enrich.ts";
+import Cover from "./Cover.tsx";
+import SongLinks, { CellText } from "./SongLinks.tsx";
+import ColumnsMenu, { useColumnChoice, useViewportWidth } from "./ColumnsMenu.tsx";
+import {
+  gridTemplate, songColumns, songFactsFor, sortRows, visibleColumns,
+  type Column, type SongInfo,
+} from "./songcols.ts";
 import {
   coverage, factOf, NO_SEL, passes, selActive, songFacets, summarise, summaryText, universe,
   type Sel,
@@ -40,55 +46,72 @@ import {
 import { CloseIcon, CopyIcon, SearchIcon } from "./icons.tsx";
 import "./pages.css";
 import "./enrichfilter.css";
+import "./songcols.css";
 
 const BATCH = 120;   // rows added each time the list grows
 
 /** What survives leaving the page for a track and coming back (not a reload). */
 const memo_ = { scroll: 0, open: null as string | null, limit: BATCH };
 
-const GroupRow = memo(function GroupRow({ g, isOpen, q, lk, enrich, onToggle, onOpen, onTrace }: {
-  g: Group; isOpen: boolean; q: string; lk: Lookups; enrich: EnrichMap | null;
+/** Search's own columns, appended to the standard song ones. */
+const PEOPLE_COL: Column<Group> = {
+  id: "people", label: "Brought by", width: "110px", align: "left", hideBelow: 720,
+  sortKey: (g) => (g.people[0] ? g.people[0].toLocaleLowerCase() : null),
+  text: (g) => g.people.length
+    ? g.people.slice(0, 2).join(", ") + (g.people.length > 2 ? ` +${g.people.length - 2}` : "") : null,
+};
+const WHEN_COL: Column<Group> = {
+  id: "when", label: "When", width: "92px", align: "right",
+  sortKey: (g) => g.latest || null, text: (g) => g.span || null,
+};
+
+const GroupRow = memo(function GroupRow({ g, info, cols, isOpen, q, lk, enrich, onToggle, onOpen, onTrace }: {
+  g: Group; info: SongInfo; cols: Column<Group>[]; isOpen: boolean; q: string; lk: Lookups; enrich: EnrichMap | null;
   onToggle: (g: Group) => void; onOpen: (t: Track) => void; onTrace: (t: Trace) => void;
 }) {
   const solo = g.tracks.length === 1;
   const rec = enrich && g.songId ? enrich[g.songId] : undefined;
-  const fam = familyOf(rec), yr = yearOf(rec);
-  return (
-    <div className={`songgroup${isOpen ? " open" : ""}`}>
-      <button className="row" aria-expanded={solo ? undefined : isOpen}
-        title={solo ? "Open this track" : isOpen ? "Hide the nights" : "Show every night it was played"}
-        onClick={() => onToggle(g)}>
-        <div className={enrich ? "t ef-t" : "t"}>
-          {enrich && <Thumb songId={g.songId ?? g.key} url={coverUrlOf(rec)} />}
-          <span className={enrich ? "ef-tt" : undefined}>
+  const hasNights = cols.some((c) => c.id === "nights");
+  const cell = (c: Column<Group>) => {
+    const text = c.text(g);
+    switch (c.id) {
+      case "cover":
+        return <Cover songId={g.songId ?? g.key} title={g.title} artist={g.artist ?? undefined} url={coverUrlOf(rec)} size={36} />;
+      case "links":
+        return null;   // the real links sit beside the row (they cannot live inside its button)
+      case "title":
+        return (
+          <>
             <Marked value={g.title} query={q} />
             {g.variants.slice(0, 2).map((v) => (
               <span key={v} className="chip variant">{v}</span>
             ))}
-            {g.nights > 1 && (
+            {!hasNights && g.nights > 1 && (
               <span className="chip recurs" title={`Played on ${g.nights} nights`}>
                 {g.nights} nights
               </span>
             )}
             {g.anon && <span className="chip anon">anon</span>}
-          </span>
-        </div>
-        <div className="a">
-          <Marked value={g.artist ?? "—"} query={q} />
-          {(fam || yr) && (
-            <span className="ef-quiet" title={[fam && familyLabel(fam), yr && `released ${yr}`].filter(Boolean).join(", ")}>
-              {fam && <span className="ef-dot" style={{ background: familyColour(fam) }} />}
-              {yr}
-            </span>
-          )}
-        </div>
-        <div className="p">
-          {g.people.length
-            ? g.people.slice(0, 2).join(", ") + (g.people.length > 2 ? ` +${g.people.length - 2}` : "")
-            : <span className="faint">unknown</span>}
-        </div>
-        <div className="d">{g.span}</div>
-      </button>
+          </>
+        );
+      case "artist":
+        return text ? <Marked value={text} query={q} /> : <CellText value={null} />;
+      default:
+        return <CellText value={text} title={c.title?.(g)} />;
+    }
+  };
+  return (
+    <div className={`songgroup${isOpen ? " open" : ""}`}>
+      <div className="sc-rowwrap">
+        <button className="row" aria-expanded={solo ? undefined : isOpen}
+          title={solo ? "Open this track" : isOpen ? "Hide the nights" : "Show every night it was played"}
+          onClick={() => onToggle(g)}>
+          {cols.map((c) => (
+            <div key={c.id} className={`sc-c sc-${c.id}${c.align === "right" ? " r" : ""}`}>{cell(c)}</div>
+          ))}
+        </button>
+        {cols.some((c) => c.id === "links") && <SongLinks song={info} className="sc-links" />}
+      </div>
 
       {isOpen && (
         <div className="plays">
@@ -141,6 +164,9 @@ export default function SongSearch({ cat, enrich = null, onOpen, onTrace, initia
   const [fams, setFams] = useSessionState<string[]>("search.fam", []);
   const [decs, setDecs] = useSessionState<string[]>("search.dec", []);
   const [sortPref, setSortPref] = useSessionState<SortKey | "auto">("search.sort", "auto");
+  const [colSort, setColSort] = useSessionState<{ id: string; dir: "asc" | "desc" } | null>("search.colsort", null);
+  const [choice, toggleCol, resetCols] = useColumnChoice("search");
+  const width = useViewportWidth();
   const [open, setOpenRaw] = useState<string | null>(memo_.open);
   const [limit, setLimitRaw] = useState(memo_.limit);
 
@@ -151,6 +177,8 @@ export default function SongSearch({ cat, enrich = null, onOpen, onTrace, initia
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef<HTMLDivElement>(null);
+  const [stickH, setStickH] = useState(160);
   const moreRef = useRef<HTMLDivElement>(null);
   const emitted = useRef<string | null>(null);
   const { toast, node: toastNode } = useToast();
@@ -206,6 +234,33 @@ export default function SongSearch({ cat, enrich = null, onOpen, onTrace, initia
     return () => root.removeEventListener("scroll", onScroll);
   }, []);
 
+  // The column header sticks just under the search box and filters, whatever height they wrap to.
+  useLayoutEffect(() => {
+    const el = stickRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setStickH(Math.round(el.getBoundingClientRect().height)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // One facts object per group (songFactsFor memoises per catalogue and enrichment).
+  const infoOf = useMemo(() => {
+    const m = new WeakMap<Group, SongInfo>();
+    return (g: Group) => {
+      let i = m.get(g);
+      if (!i) m.set(g, i = songFactsFor(cat, enrich, g.songId ?? g.tracks[0]));
+      return i;
+    };
+  }, [cat, enrich]);
+  const allCols = useMemo<Column<Group>[]>(() => {
+    // "Nights" here counts the nights that survived the filters, like the old chip did.
+    const std = songColumns<Group>(infoOf).map((c) => c.id === "nights"
+      ? { ...c, sortKey: (g: Group) => g.nights, text: (g: Group) => String(g.nights) } : c);
+    const links = std.pop()!;
+    return [...std, PEOPLE_COL, WHEN_COL, links];
+  }, [infoOf]);
+  const cols = useMemo(() => visibleColumns(allCols, choice, width), [allCols, choice, width]);
+
   const index = useMemo(() => buildIndex(cat), [cat]);
   const lk = useMemo(() => lookups(cat), [cat]);
 
@@ -255,12 +310,17 @@ export default function SongSearch({ cat, enrich = null, onOpen, onTrace, initia
   // With no text, filters alone list songs A to Z (nothing else is a sensible order).
   const sort: SortKey = sortPref === "auto" || (sortPref === "match" && !q)
     ? (q ? "match" : enrichOn ? "az" : "nights") : sortPref;
-  const groups = useMemo(() => sortGroups(raw, sort, !!q), [raw, sort, q]);
+  const sortCol = colSort ? cols.find((c) => c.id === colSort.id && c.sortKey) : undefined;
+  const groups = useMemo(() => {
+    const base = sortGroups(raw, sort, !!q);
+    // A header click sorts by that column; ties keep the order above, unknowns go last.
+    return sortCol && colSort ? sortRows(base, sortCol.sortKey!, colSort.dir) : base;
+  }, [raw, sort, q, sortCol, colSort]);
   const shown = useMemo(() => groups.slice(0, limit), [groups, limit]);
   const filtered = !!(personId || year || type);
 
   // A new question starts at the top with nothing unfolded.
-  useOnChange([dq, includeAnon, personId, year, type, sort, fams.join(","), decs.join(",")].join("|"), () => {
+  useOnChange([dq, includeAnon, personId, year, type, sort, sortCol?.id, colSort?.dir, fams.join(","), decs.join(",")].join("|"), () => {
     setOpen(null);
     setLimit(() => BATCH);
     scrollRootOf(inputRef.current)?.scrollTo({ top: 0, behavior: "instant" });
@@ -318,6 +378,13 @@ export default function SongSearch({ cat, enrich = null, onOpen, onTrace, initia
     toast((await copyText(window.location.href)) ? "Link to this search copied" : "Could not copy the link");
   };
 
+  const clickHeader = (c: Column<Group>) => {
+    if (!c.sortKey) return;
+    if (colSort?.id !== c.id) setColSort({ id: c.id, dir: "asc" });
+    else if (colSort.dir === "asc") setColSort({ id: c.id, dir: "desc" });
+    else setColSort(null);
+  };
+
   const sortOptions: SortKey[] = ["match", "nights", "az", "newest"];
 
   return (
@@ -328,7 +395,7 @@ export default function SongSearch({ cat, enrich = null, onOpen, onTrace, initia
         {" "}{fmtCount(nightCount)} nights{range && <> spanning {range}</>}
       </p>
 
-      <div className="sstick">
+      <div className="sstick" ref={stickRef}>
         <div className="searchwrap">
           <span className="searchicon" aria-hidden="true"><SearchIcon size={19} /></span>
           <input
@@ -367,7 +434,7 @@ export default function SongSearch({ cat, enrich = null, onOpen, onTrace, initia
             {types.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
           <select aria-label="Sort by" value={sort}
-            onChange={(e) => setSortPref(e.target.value as SortKey)}>
+            onChange={(e) => { setSortPref(e.target.value as SortKey); setColSort(null); }}>
             {sortOptions.map((s) => (
               <option key={s} value={s} disabled={s === "match" && !q}>{SORT_LABEL[s]}</option>
             ))}
@@ -384,12 +451,13 @@ export default function SongSearch({ cat, enrich = null, onOpen, onTrace, initia
             {enrichOn ? summaryText(sum, sel) : plural(groups.filter((g) => g.songId).length, "song")}
             {!enrichOn && groups.some((g) => !g.songId) && ` + ${fmtCount(groups.filter((g) => !g.songId).length)} without an artist`}
             {" · "}{plural(plays, "play")}
-            {!q && !filtered && !enrichOn && ` ·${SORT_LABEL[sort].toLowerCase()} first`}
+            {!q && !filtered && !enrichOn && !sortCol && ` ·${SORT_LABEL[sort].toLowerCase()} first`}
             {q && (
               <button className="linkbtn" onClick={() => void copyLink()} title="Copy a link to this search">
                 <CopyIcon size={13} /> copy link
               </button>
             )}
+            <ColumnsMenu columns={allCols} choice={choice} onToggle={toggleCol} onReset={resetCols} />
           </span>
         </div>
       </div>
@@ -421,9 +489,26 @@ export default function SongSearch({ cat, enrich = null, onOpen, onTrace, initia
           </div>
         </div>
       ) : (
-        <div className={`rows resultlist${stale ? " stale" : ""}${enrich ? " ef-rich" : ""}`} ref={listRef} onKeyDown={onListKey}>
+        <div className={`rows resultlist sc-list${stale ? " stale" : ""}`} ref={listRef} onKeyDown={onListKey}
+          style={{ "--cols": gridTemplate(cols), "--sc-top": `${stickH}px` } as CSSProperties}>
+          <div className="sc-head" role="row">
+            {cols.map((c) => {
+              const on = colSort?.id === c.id ? colSort.dir : null;
+              return (
+                <div key={c.id} role="columnheader" className={`sc-h${c.align === "right" ? " r" : ""}`}
+                  aria-sort={c.sortKey ? (on === "asc" ? "ascending" : on === "desc" ? "descending" : "none") : undefined}>
+                  {c.sortKey ? (
+                    <button type="button" className={`sc-hb${on ? " on" : ""}`} onClick={() => clickHeader(c)}
+                      title={`Sort by ${c.label.toLowerCase()}`}>
+                      {c.label}<span className="sc-arrow" aria-hidden="true">{on === "asc" ? "▲" : on === "desc" ? "▼" : ""}</span>
+                    </button>
+                  ) : c.id === "cover" || c.id === "links" ? <span className="sc-sr">{c.label}</span> : c.label}
+                </div>
+              );
+            })}
+          </div>
           {shown.map((g) => (
-            <GroupRow key={g.key} g={g} isOpen={open === g.key} q={q} lk={lk} enrich={enrich}
+            <GroupRow key={g.key} g={g} info={infoOf(g)} cols={cols} isOpen={open === g.key} q={q} lk={lk} enrich={enrich}
               onToggle={toggle} onOpen={onOpen} onTrace={onTrace} />
           ))}
           {shown.length < groups.length && (

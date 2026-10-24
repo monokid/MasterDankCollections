@@ -453,7 +453,8 @@ export default function App() {
       <TimelinePage cat={cat} enrich={enrich} trace={trace} setTrace={setTrace}
         selected={selectedNight} setSelected={setSelectedNight}
         range={range} setRange={setRange} onInsights={onInsights}
-        onOpen={open} onOpenNight={openNight} onTrace={onTrace} />
+        onOpen={open} onOpenNight={openNight} onTrace={onTrace}
+        onOpenPerson={openPerson} onOpenArtist={openArtist} onOpenSong={openSong} />
     );
   } else if (view === "browse") {
     page = <BrowseView cat={cat} weather={weather} enrich={enrich} onOpen={open} eventId={eventId} setEventId={setNight} />;
