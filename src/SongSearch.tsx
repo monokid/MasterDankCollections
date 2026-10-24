@@ -30,7 +30,8 @@ import {
   consumeFocusRequest, FOCUS_SEARCH_EVENT, getSearchQuery, setSearchQuery, subscribeSearchQuery,
 } from "./events.ts";
 import { useToast } from "./Toast.tsx";
-import EnrichChips from "./EnrichChips.tsx";
+import { EnrichPopovers } from "./EnrichChips.tsx";
+import { familyLabel } from "./families.ts";
 import { coverUrlOf, type EnrichMap } from "./enrich.ts";
 import Cover from "./Cover.tsx";
 import SongLinks, { CellText } from "./SongLinks.tsx";
@@ -40,13 +41,15 @@ import {
   type Column, type SongInfo,
 } from "./songcols.ts";
 import {
-  coverage, factOf, NO_SEL, passes, selActive, songFacets, summarise, summaryText, universe,
+  coverage, factOf, NO_SEL, passes, selActive, songFacets, summarise, universe,
   type Sel,
 } from "./enrichfilter.ts";
+import { activeChips, clearAll, hiddenNote, orderText, removeChip, suggestions, type FilterState } from "./searchbar.ts";
 import { CloseIcon, CopyIcon, SearchIcon } from "./icons.tsx";
 import "./pages.css";
 import "./enrichfilter.css";
 import "./songcols.css";
+import "./searchbar.css";
 
 const BATCH = 120;   // rows added each time the list grows
 
@@ -254,8 +257,11 @@ export default function SongSearch({ cat, enrich = null, onOpen, onTrace, initia
   }, [cat, enrich]);
   const allCols = useMemo<Column<Group>[]>(() => {
     // "Nights" here counts the nights that survived the filters, like the old chip did.
+    // Search gives the title the flexible share (page-specific; the shared defaults stay).
     const std = songColumns<Group>(infoOf).map((c) => c.id === "nights"
-      ? { ...c, sortKey: (g: Group) => g.nights, text: (g: Group) => String(g.nights) } : c);
+      ? { ...c, sortKey: (g: Group) => g.nights, text: (g: Group) => String(g.nights) }
+      : c.id === "title" ? { ...c, width: "minmax(0,3fr)" }
+      : c.id === "artist" ? { ...c, width: "minmax(0,1.5fr)" } : c);
     const links = std.pop()!;
     return [...std, PEOPLE_COL, WHEN_COL, links];
   }, [infoOf]);
@@ -345,6 +351,19 @@ export default function SongSearch({ cat, enrich = null, onOpen, onTrace, initia
   const clearFilters = () => { setPersonId(""); setYear(""); setType(""); };
   const setSel = (s: Sel) => { setFams(s.families); setDecs(s.decades); };
 
+  // Every filter that is on, as removable chips under the bar (never the query).
+  const fstate: FilterState = { personId, year, type, families: sel.families, decades: sel.decades };
+  const applyFilters = (f: FilterState) => {
+    setPersonId(f.personId); setYear(f.year); setType(f.type); setFams(f.families); setDecs(f.decades);
+  };
+  const chips = useMemo(() => activeChips(
+    { personId, year, type, families: sel.families, decades: sel.decades },
+    { person: (id) => lk.peopleName.get(id) ?? id, family: familyLabel },
+  ), [personId, year, type, sel, lk]);
+  const idle = !q && !filtered && !enrichOn;
+  const ideas = useMemo(
+    () => suggestions(cat.songs, enrich ? uni.decades.map(([d]) => d) : []), [cat, enrich, uni]);
+
   const onInputKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown") {
       const first = listRef.current?.querySelector<HTMLElement>("button.row");
@@ -388,7 +407,7 @@ export default function SongSearch({ cat, enrich = null, onOpen, onTrace, initia
   const sortOptions: SortKey[] = ["match", "nights", "az", "newest"];
 
   return (
-    <div className="page">
+    <div className="page wide search">
       <h1>Search the collection</h1>
       <p className="sub">
         {fmtCount(cat.stats.songs)} songs · {fmtCount(cat.stats.artists)} artists ·
@@ -396,76 +415,130 @@ export default function SongSearch({ cat, enrich = null, onOpen, onTrace, initia
       </p>
 
       <div className="sstick" ref={stickRef}>
-        <div className="searchwrap">
-          <span className="searchicon" aria-hidden="true"><SearchIcon size={19} /></span>
-          <input
-            ref={inputRef}
-            className="searchbox"
-            type="text"
-            aria-label="Search songs, artists, albums, people or events"
-            aria-keyshortcuts="/"
-            placeholder="Song, artist, album, person or event…   ( / to focus )"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={onInputKey}
-            spellCheck={false}
-            autoComplete="off"
-          />
-          {query && (
-            <button className="searchclear" aria-label="Clear search" title="Clear (Esc)"
-              onClick={() => { setQuery(""); inputRef.current?.focus(); }}>
-              <CloseIcon size={15} />
-            </button>
-          )}
+        <div className="sb">
+          <div className="searchwrap">
+            <span className="searchicon" aria-hidden="true"><SearchIcon size={19} /></span>
+            <input
+              ref={inputRef}
+              className="searchbox"
+              type="text"
+              aria-label="Search songs, artists, albums, people or nights"
+              aria-keyshortcuts="/"
+              title="Press / anywhere to jump to this box"
+              placeholder="Search songs, artists, albums, people or nights"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={onInputKey}
+              spellCheck={false}
+              autoComplete="off"
+            />
+            {query ? (
+              <button className="searchclear" aria-label="Clear search" title="Clear (Esc)"
+                onClick={() => { setQuery(""); inputRef.current?.focus(); }}>
+                <CloseIcon size={15} />
+              </button>
+            ) : (
+              <kbd className="sb-key" aria-hidden="true" title="Press / anywhere to jump to the search box">/</kbd>
+            )}
+          </div>
+
+          <div className="sb-bar">
+            <select aria-label="Brought by" value={personId}
+              onChange={(e) => setPersonId(e.target.value)}>
+              <option value="">Anyone</option>
+              {cat.people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <select aria-label="Year" value={year} onChange={(e) => setYear(e.target.value)}>
+              <option value="">Any year</option>
+              {years.map((y) => <option key={y} value={y}>{y}</option>)}
+            </select>
+            <select aria-label="Kind of night" value={type} onChange={(e) => setType(e.target.value)}>
+              <option value="">Any kind of night</option>
+              {types.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <select aria-label="Sort by" value={sort}
+              onChange={(e) => { setSortPref(e.target.value as SortKey); setColSort(null); }}>
+              {sortOptions.map((s) => (
+                <option key={s} value={s} disabled={s === "match" && !q}>{SORT_LABEL[s]}</option>
+              ))}
+            </select>
+            {enrich && (uni.families.length > 0 || uni.decades.length > 0) && (
+              <EnrichPopovers universe={uni} counts={facets} sel={sel} onChange={setSel}
+                hint={hiddenNote(sum, sel, libCov)} />
+            )}
+            <label className="sb-switch" title={`Include the ${fmtCount(cat.stats.anonTracks)} anonymised tracks`}>
+              <input type="checkbox" role="switch" checked={includeAnon}
+                aria-label={`Include anonymised tracks (${fmtCount(cat.stats.anonTracks)})`}
+                onChange={(e) => setIncludeAnon(e.target.checked)} />
+              <span className="sb-track" aria-hidden="true" />
+              Anonymised
+            </label>
+            <span className="sb-end">
+              <ColumnsMenu columns={allCols} choice={choice} onToggle={toggleCol} onReset={resetCols} />
+            </span>
+          </div>
         </div>
 
-        <div className="filters">
-          <select aria-label="Brought by" value={personId}
-            onChange={(e) => setPersonId(e.target.value)}>
-            <option value="">Anyone</option>
-            {cat.people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-          <select aria-label="Year" value={year} onChange={(e) => setYear(e.target.value)}>
-            <option value="">Any year</option>
-            {years.map((y) => <option key={y} value={y}>{y}</option>)}
-          </select>
-          <select aria-label="Kind of night" value={type} onChange={(e) => setType(e.target.value)}>
-            <option value="">Any kind of night</option>
-            {types.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-          <select aria-label="Sort by" value={sort}
-            onChange={(e) => { setSortPref(e.target.value as SortKey); setColSort(null); }}>
-            {sortOptions.map((s) => (
-              <option key={s} value={s} disabled={s === "match" && !q}>{SORT_LABEL[s]}</option>
-            ))}
-          </select>
-          {filtered && (
-            <button className="tl-clear nomargin" onClick={clearFilters}>clear filters</button>
-          )}
-          <label>
-            <input type="checkbox" checked={includeAnon}
-              onChange={(e) => setIncludeAnon(e.target.checked)} />
-            Include anonymised ({fmtCount(cat.stats.anonTracks)})
-          </label>
-          <span className="rcount" aria-live="polite">
-            {enrichOn ? summaryText(sum, sel) : plural(groups.filter((g) => g.songId).length, "song")}
-            {!enrichOn && groups.some((g) => !g.songId) && ` + ${fmtCount(groups.filter((g) => !g.songId).length)} without an artist`}
-            {" · "}{plural(plays, "play")}
-            {!q && !filtered && !enrichOn && !sortCol && ` ·${SORT_LABEL[sort].toLowerCase()} first`}
-            {q && (
-              <button className="linkbtn" onClick={() => void copyLink()} title="Copy a link to this search">
-                <CopyIcon size={13} /> copy link
+        {chips.length > 0 && (
+          <div className="sb-active" role="group" aria-label="Active filters">
+            {chips.map((c) => (
+              <button key={c.kind + c.value} type="button" className="sb-chip"
+                aria-label={`Remove filter ${c.label}`} title="Remove this filter"
+                onClick={() => applyFilters(removeChip(fstate, c))}>
+                {c.label}<span aria-hidden="true">✕</span>
               </button>
-            )}
-            <ColumnsMenu columns={allCols} choice={choice} onToggle={toggleCol} onReset={resetCols} />
-          </span>
-        </div>
+            ))}
+            <button type="button" className="linkbtn" onClick={() => applyFilters(clearAll(fstate))}>Clear all</button>
+          </div>
+        )}
       </div>
 
-      {enrich && (uni.families.length > 0 || uni.decades.length > 0) && (
-        <EnrichChips universe={uni} counts={facets} sel={sel} onChange={setSel}
-          hint={`${fmtCount(libCov.either)} of ${fmtCount(libCov.total)} songs have a genre or year on file; the rest are hidden while a chip is on.`} />
+      {idle && (ideas.artists.length > 0 || ideas.songs.length > 0 || ideas.decades.length > 0) && (
+        <div className="sb-ideas">
+          {ideas.artists.length > 0 && (
+            <div className="sb-idearow"><span className="sb-idealabel">Most nights</span>
+              {ideas.artists.map((a) => (
+                <button key={a.name} type="button" className="fchip" onClick={() => setQuery(a.name)}>
+                  {a.name} <i>{fmtCount(a.nights)}</i>
+                </button>
+              ))}
+            </div>
+          )}
+          {ideas.songs.length > 0 && (
+            <div className="sb-idearow"><span className="sb-idealabel">Brought most often</span>
+              {ideas.songs.map((x) => (
+                <button key={x.title + x.artist} type="button" className="fchip" onClick={() => setQuery(x.title)}
+                  title={x.artist ?? undefined}>
+                  {x.title} <i>{fmtCount(x.nights)}</i>
+                </button>
+              ))}
+            </div>
+          )}
+          {ideas.decades.length > 0 && (
+            <div className="sb-idearow"><span className="sb-idealabel">Try a decade</span>
+              {ideas.decades.map((d) => (
+                <button key={d} type="button" className="fchip" onClick={() => setDecs([d])}>{d}</button>
+              ))}
+            </div>
+          )}
+        </div>
       )}
+
+      <div className="sb-count" aria-live="polite">
+        <span>
+          {enrichOn
+            ? `${fmtCount(sum.shown)} of ${fmtCount(sum.total)} songs`
+            : plural(groups.filter((g) => g.songId).length, "song")}
+          {!enrichOn && groups.some((g) => !g.songId) && ` + ${fmtCount(groups.filter((g) => !g.songId).length)} without an artist`}
+          {" · "}{plural(plays, "play")}
+          {!sortCol && ` · ${orderText(sort)}`}
+        </span>
+        {q && (
+          <button className="linkbtn" onClick={() => void copyLink()} title="Copy a link to this search">
+            <CopyIcon size={13} /> copy link
+          </button>
+        )}
+      </div>
 
       {groups.length === 0 ? (
         <div className="empty">

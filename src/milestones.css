@@ -74,3 +74,9 @@
   .ms-detail { display: none; }
   .ms-date { width: 70px; }
 }
+
+/* Playback pace: speed buttons, the pause toggle and the position readout sit next to play. */
+.tl-speed { display: inline-flex; gap: 2px; }
+.tl-pausechk { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-dim); cursor: pointer; white-space: nowrap; }
+.tl-pausechk input { accent-color: var(--accent); margin: 0; cursor: pointer; }
+.tl-progress { font-size: 12px; color: var(--ink-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }

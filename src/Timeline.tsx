@@ -28,6 +28,7 @@ import { familyColour, familyLabel } from "./families.ts";
 import { legendCounts, nightSounds, type NightSound } from "./timelinesound.ts";
 import { useSessionState } from "./hooks.ts";
 import { milestonesOf, SHAPE, type Milestone, type MilestoneKind, type MilestoneLink, type Shape } from "./milestones.ts";
+import { BASE_SECONDS, SPEEDS, createPacer } from "./playpace.ts";
 import "./timelinesound.css";
 import "./milestones.css";
 
@@ -42,7 +43,6 @@ const DAY = 86400000;
 const GUTTER = 96;            // room on the left for lane names
 const MAX_ZOOM = 140;
 const LANE_H = 22;
-const PLAY_SECONDS = 26;      // the whole decade, at 1x
 const STAGGER_MS = 24;        // the intro builds the bars one after another
 
 const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
@@ -238,7 +238,9 @@ export default function Timeline({
   const [playhead, setPlayhead] = useState<number | null>(null);
   const phRef = useRef<number | null>(null);
   const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(1);
+  const [speedSaved, setSpeed] = useSessionState<number>("timeline.speed", 1);
+  const speed = (SPEEDS as readonly number[]).includes(speedSaved) ? speedSaved : 1;
+  const [pauseMs, setPauseMs] = useSessionState<boolean>("timeline.pauseOnMilestones", true);
 
   const drag = useRef<{
     kind: "pan" | "select"; x0: number; pan0: number; lastX: number; lastT: number;
@@ -383,20 +385,38 @@ export default function Timeline({
     return () => el.removeEventListener("wheel", onWheel);
   }, [plotW, aim]);
 
-  // Playback: the playhead sweeps the decade.
+  // Milestones, over the whole library (never the range or the zoom): see src/milestones.ts.
+  const allMs = useMemo(() => milestonesOf(cat), [cat]);
+  const msByNight = useMemo(() => {
+    const m = new Map<string, Milestone[]>();
+    for (const x of allMs) { const l = m.get(x.eventId); if (l) l.push(x); else m.set(x.eventId, [x]); }
+    return m;
+  }, [allMs]);
+
+  // Playback: the playhead sweeps the decade, easing down on nights with milestones (src/playpace.ts).
+  // Under reduced motion it does not dwell: the sweep is as it always was, only slower.
+  const reducedMotion = useMemo(() => prefersReduced(), []);
+  const pacer = useMemo(() => createPacer({
+    start: t0, end: t0 + span, baseSeconds: BASE_SECONDS,
+    stops: nights.flatMap((n, i) => {
+      const ms = msByNight.get(n.id);
+      return ms ? [{ pos: times[i], chars: ms.reduce((c, m) => c + m.text.length + (m.detail?.length ?? 0), 0) }] : [];
+    }),
+  }), [nights, times, msByNight, t0, span]);
+  const dwellPause = pauseMs && !reducedMotion;
   useEffect(() => {
     if (!playing) return;
     let raf = 0, last = performance.now();
     const step = (now: number) => {
-      const dt = now - last; last = now;
-      const next = (phRef.current ?? t0) + (dt / 1000) * (span / PLAY_SECONDS) * speed;
-      if (next >= t0 + span) { setPh(t0 + span); setPlaying(false); return; }
-      setPh(next);
+      const dt = Math.min(now - last, 100); last = now;       // a hidden tab must not leap
+      const r = pacer.step(dt, { speed, pause: dwellPause });
+      setPh(r.pos);
+      if (r.done) { setPlaying(false); return; }
       raf = requestAnimationFrame(step);
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [playing, speed, t0, span]);
+  }, [playing, speed, dwellPause, pacer]);
 
   // While playing, keep the playhead in view.
   useEffect(() => {
@@ -410,10 +430,14 @@ export default function Timeline({
   }, [playhead]);
 
   const startPlay = () => {
-    if (phRef.current === null || phRef.current >= t0 + span - 1) setPh(t0);
+    if (phRef.current === null || phRef.current >= t0 + span - 1) { setPh(t0); pacer.seek(t0); }
     setPlaying(true);
   };
-  const stopPlay = () => { setPlaying(false); setPh(null); };
+  const stopPlay = () => { setPlaying(false); setPh(null); pacer.seek(t0); };
+  const changeSpeed = (d: number) => {
+    const i = (SPEEDS as readonly number[]).indexOf(speed) + d;
+    if (i >= 0 && i < SPEEDS.length) setSpeed(SPEEDS[i]);
+  };
 
   // ------------------------------------------------------------ interaction
 
@@ -438,6 +462,7 @@ export default function Timeline({
   const onKey = (e: React.KeyboardEvent) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "Escape") { onSelect(null); setMode("pan"); setDraft(null); drag.current = null; return; }
+    if (e.key === "[" || e.key === "]") { e.preventDefault(); changeSpeed(e.key === "]" ? 1 : -1); return; }
     if (e.key === " ") { e.preventDefault(); playing ? setPlaying(false) : startPlay(); return; }
     if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(1.8); return; }
     if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomBy(1 / 1.8); return; }
@@ -560,18 +585,12 @@ export default function Timeline({
   const now = playhead === null ? null : at[(upTo ?? 0) - 1] ?? { nights: 0, songs: 0, canon: 0, people: 0 };
 
   // ------------------------------------------------------------ milestones
-  // Computed over the whole library (never the range or the zoom): see src/milestones.ts.
-  const allMs = useMemo(() => milestonesOf(cat), [cat]);
-  const msByNight = useMemo(() => {
-    const m = new Map<string, Milestone[]>();
-    for (const x of allMs) { const l = m.get(x.eventId); if (l) l.push(x); else m.set(x.eventId, [x]); }
-    return m;
-  }, [allMs]);
   const nightIdx = useMemo(() => new Map(nights.map((n, i) => [n.id, i])), [nights]);
-  const reduced = useMemo(() => prefersReduced(), []);
+  const reduced = reducedMotion;
   const [msOpen, setMsOpen] = useSessionState<boolean>("timeline.milestonesOpen", true);
-  const [ticker, setTicker] = useState<{ m: Milestone; born: number }[]>([]);
-  const clock = useRef(0);                       // playing time, ms: stands still while paused
+  const [ticker, setTicker] = useState<{ m: Milestone; until: number }[]>([]);
+  const clock = useRef(0);                       // real time spent playing, ms: stands still while paused
+  const lastTick = useRef(0);
   const lastUp = useRef(0);
   const [announce, setAnnounce] = useState("");
   const pending = useRef<string[]>([]);
@@ -589,7 +608,12 @@ export default function Timeline({
     const fresh: Milestone[] = [];
     for (let i = upTo - 1; i >= from; i--) fresh.push(...(msByNight.get(nights[i]?.id) ?? []));
     if (!fresh.length) return;
-    if (!reduced) setTicker((old) => [...fresh.map((m) => ({ m, born: clock.current })), ...old].slice(0, TICKER_MAX));
+    if (!reduced) {
+      // On screen at least TICKER_MS of real time, and through the whole dwell plus a beat to read it.
+      const dw = pacer.dwell;
+      const until = clock.current + Math.max(TICKER_MS, dw ? dw.total - dw.elapsed + 1500 : 0);
+      setTicker((old) => [...fresh.map((m) => ({ m, until })), ...old].slice(0, TICKER_MAX));
+    }
     // Screen readers: batch what arrived, at most one announcement per ANNOUNCE_MS.
     pending.current.push(...fresh.slice().reverse().map((m) => `${m.date.slice(0, 4)}, ${m.text}`));
     if (!announceTimer.current) {
@@ -599,21 +623,25 @@ export default function Timeline({
         if (p.length) setAnnounce(p.slice(0, 2).join(". ") + (p.length > 2 ? `. And ${p.length - 2} more.` : "."));
       }, ANNOUNCE_MS);
     }
-  }, [upTo, msByNight, nights, reduced]);
+  }, [upTo, msByNight, nights, reduced, pacer]);
   useEffect(() => () => { if (announceTimer.current) clearTimeout(announceTimer.current); }, []);
 
-  // Cards fade after TICKER_MS of playing time; pausing stops the clock, so they wait.
+  // Cards fade by wall-clock time that only runs while playing, and never while the playhead is
+  // dwelling: pausing stops the clock, so they wait.
   useEffect(() => {
     if (!tickerRuns || reduced) return;
+    lastTick.current = performance.now();
     const id = setInterval(() => {
-      clock.current += 200;
+      const t = performance.now();
+      clock.current += t - lastTick.current; lastTick.current = t;
       setTicker((old) => {
-        const keep = old.filter((t) => clock.current - t.born < TICKER_MS);
+        const dwelling = playing && pacer.dwell !== null;
+        const keep = old.filter((c) => dwelling || clock.current < c.until);
         return keep.length === old.length ? old : keep;
       });
     }, 200);
     return () => clearInterval(id);
-  }, [tickerRuns, reduced]);
+  }, [tickerRuns, reduced, pacer, playing]);
 
   const shownMs = useMemo(
     () => (upTo === null ? allMs : allMs.filter((m) => (nightIdx.get(m.eventId) ?? 0) < upTo)),
@@ -686,12 +714,22 @@ export default function Timeline({
           {playing ? "❚❚ pause" : playhead !== null ? "▶ resume" : "▶ play the decade"}
         </button>
         {playhead !== null && (
-          <>
-            <button className="tl-zoom" aria-label="Playback speed" onClick={() => setSpeed(speed === 1 ? 2.5 : 1)}>
-              {speed === 1 ? "1×" : "2.5×"}
-            </button>
-            <button className="tl-zoom" aria-label="Stop and clear the playhead" onClick={stopPlay}>■</button>
-          </>
+          <button className="tl-zoom" aria-label="Stop and clear the playhead" onClick={stopPlay}>■</button>
+        )}
+        <span className="tl-speed" role="group" aria-label="Playback speed" title="Playback speed ( [ slower, ] faster )">
+          {SPEEDS.map((v) => (
+            <button key={v} className={`tl-zoom${speed === v ? " on" : ""}`} aria-pressed={speed === v}
+              onClick={() => setSpeed(v)}>{v}×</button>
+          ))}
+        </span>
+        <label className="tl-pausechk" title="Slow down on nights with milestones so they can be read">
+          <input type="checkbox" checked={pauseMs} onChange={(e) => setPauseMs(e.target.checked)} />
+          Pause on milestones
+        </label>
+        {playhead !== null && (
+          <span className="tl-progress" aria-label="Playback position">
+            {new Date(playhead).getUTCFullYear()} · night {Math.min(Math.max(upTo ?? 0, 1), nights.length)} of {nights.length}
+          </span>
         )}
       </div>
 
@@ -764,7 +802,7 @@ export default function Timeline({
         tabIndex={0}
         role="group"
         aria-roledescription="timeline"
-        aria-label={`Timeline of ${nights.length} nights. Arrow keys step through the nights, plus and minus zoom, zero resets, space plays, escape clears.`}
+        aria-label={`Timeline of ${nights.length} nights. Arrow keys step through the nights, plus and minus zoom, zero resets, space plays or pauses, left and right bracket change speed, escape clears.`}
         onKeyDown={onKey}
         onPointerDown={down}
         onPointerMove={move}
@@ -925,7 +963,7 @@ export default function Timeline({
 
       <p className="tl-help">
         <b>Drag</b> to pan · <b>scroll</b> or <b>+ −</b> to zoom · <b>shift-drag</b> selects a range ·
-        {" "}<b>← →</b> step through nights (click the chart first) · <b>space</b> plays · <b>0</b> resets · <b>esc</b> clears
+        {" "}<b>← →</b> step through nights (click the chart first) · <b>space</b> plays or pauses · <b>[</b> <b>]</b> slower or faster · <b>0</b> resets · <b>esc</b> clears
       </p>
       <section className="ms-panel" aria-labelledby="ms-title">
         <h3 className="ms-title" id="ms-title">
