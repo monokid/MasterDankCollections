@@ -1,7 +1,6 @@
 /** Tests for src/trendinsights.ts (the Trends and Nights & sound charts). Each is
  *  named after the way the number would quietly go wrong. */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import {
   compareKpis, compareReading, groupAverages, histogram, kindsByYear, monthCounts, monthYearGrid, neighbourZ,
   nightKind, normalise, pearson, peakReading, skyGroup, tempBand, trailing, weatherInputs, weekdayCounts,
@@ -19,10 +18,8 @@ test("weekday off-by-one: dates are read as text, so 2021-03-01 is a Monday in e
   assert.equal(weekdayOf("2021-03-01"), 0);
   assert.equal(weekdayOf("2021-03-07"), 6);
   assert.deepEqual(weekdayCounts([{ date: "2021-03-01" }, { date: "2021-03-07" }, { date: "2021-03-07" }]), [1, 0, 0, 0, 0, 0, 2]);
-  // every real night lands on exactly one weekday
-  const cat = JSON.parse(readFileSync(new URL("../public/data/catalog.json", import.meta.url), "utf8"));
-  const dates = cat.events.filter((e: { kind: string; date: string | null }) => e.kind !== "collection" && e.date).map((e: { date: string }) => ({ date: e.date }));
-  assert.ok(dates.length > 0);
+  // every night lands on exactly one weekday and one month, across a year boundary
+  const dates = ["2015-09-25", "2016-12-31", "2017-01-01", "2024-02-29", "2026-05-01"].map((date) => ({ date }));
   assert.equal(weekdayCounts(dates).reduce((a, b) => a + b, 0), dates.length);
   assert.equal(monthCounts(dates).reduce((a, b) => a + b, 0), dates.length);
 });
