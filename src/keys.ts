@@ -2,6 +2,7 @@
  *  (never while typing, never with a modifier, "g" then a letter) are testable.
  *
  *    /        focus search          ?   keyboard help         Esc  close / back out
+ *    r        start the cosmic radio (or skip to the next song)
  *    g s|m|t|b|p|i   go to Search / Music / Timeline / Browse / People / Insights  (like Gmail)  */
 
 export type GotoView = "search" | "music" | "timeline" | "browse" | "people" | "insights";
@@ -10,6 +11,7 @@ export type KeyAction =
   | { type: "focus-search" }
   | { type: "help" }
   | { type: "escape" }
+  | { type: "radio" }
   | { type: "goto"; to: GotoView };
 
 export interface KeyInfo {
@@ -45,6 +47,7 @@ export function createKeyMachine(now: () => number = () => Date.now()) {
         case "/": return { type: "focus-search" };
         case "?": return { type: "help" };
         case "Escape": return { type: "escape" };
+        case "r": return { type: "radio" };
         default: return null;
       }
     },

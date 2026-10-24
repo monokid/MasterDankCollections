@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import type { Catalog, Track } from "./catalog.ts";
 import Starfield from "./Starfield.tsx";
 import Logo from "./Logo.tsx";
@@ -18,6 +18,8 @@ import type { EnrichMap } from "./enrich.ts";
 import type { Range } from "./analytics.ts";
 import { HOME, formatRoute, parseRoute, titleFor, type InsightsTab, type Route } from "./route.ts";
 import { createKeyMachine, isTypingTarget, type GotoView } from "./keys.ts";
+import type { PlayerProps } from "./Player.tsx";
+import type { PlayDetail } from "./radio.ts";
 import { getSearchQuery, requestSearchFocus, setSearchQuery, subscribeSearchQuery } from "./events.ts";
 
 // Home is the only thing in the first download. Every page is its own chunk,
@@ -90,6 +92,11 @@ export default function App() {
   const [enrich, setEnrich] = useState<EnrichMap | null>(null);
   const [weather, setWeather] = useState<WeatherMap>({});
   const [help, setHelp] = useState(false);
+  // The cosmic radio is its own chunk, fetched once the app is idle (or the moment someone asks for it).
+  const [playerOn, setPlayerOn] = useState(false);
+  const [PlayerC, setPlayerC] = useState<ComponentType<PlayerProps> | null>(null);
+  const playReq = useRef<PlayDetail | null>(null);       // a request that came before the chunk did
+  const playerLive = useRef(false);
 
   // Latest values for listeners that are registered once.
   const catRef = useRef<Catalog | null>(null);
@@ -213,6 +220,28 @@ export default function App() {
       void import("./NightPage.tsx");
     }, 4000);
   }, [cat]);
+
+  useEffect(() => {
+    if (!cat) return;
+    return whenIdle(() => setPlayerOn(true), 3000);
+  }, [cat]);
+  useEffect(() => {
+    if (!playerOn) return;
+    let alive = true;
+    import("./Player.tsx").then((m) => { if (alive) setPlayerC(() => m.default); }).catch(() => {});   // no radio is not a broken page
+    return () => { alive = false; };
+  }, [playerOn]);
+  playerLive.current = PlayerC !== null;
+  // "mdc:play" (see radio.ts): the play buttons around the app. Once the Player is mounted it listens itself.
+  useEffect(() => {
+    const on = (e: Event) => {
+      if (playerLive.current) return;
+      playReq.current = (e as CustomEvent<PlayDetail>).detail;
+      setPlayerOn(true);
+    };
+    window.addEventListener("mdc:play", on);
+    return () => window.removeEventListener("mdc:play", on);
+  }, []);
 
   // ------------------------------------------------------- history & scroll
 
@@ -361,6 +390,11 @@ export default function App() {
       const open = catRef.current !== null && !l.wash;
       switch (a.type) {
         case "help": e.preventDefault(); setHelp(true); break;
+        case "radio":
+          if (!open) break;
+          e.preventDefault();
+          window.dispatchEvent(new CustomEvent<PlayDetail>("mdc:play", { detail: { mode: "radio" } }));
+          break;
         case "escape": if (l.detail) { e.preventDefault(); closeDetail(); } break;
         case "focus-search":
           if (!open) break;
@@ -506,6 +540,10 @@ export default function App() {
       {wash && (
         <Wash x={wash.x} y={wash.y} reduced={prefersReducedMotion()}
           onPeak={onPeak} onDone={() => setWash(null)} />
+      )}
+      {cat && PlayerC && (
+        <PlayerC cat={cat} enrich={enrich} initial={playReq.current} hideIdle={view === "home" || wash !== null}
+          onOpenSong={openSong} onOpenArtist={openArtist} />
       )}
       {help && <KeyHelp onClose={() => setHelp(false)} />}
       <div className="mdc-sr" role="status" aria-live="polite">{announce}</div>

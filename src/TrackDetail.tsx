@@ -18,6 +18,7 @@ import { copyText, spotifyUrl } from "./pagehelpers.ts";
 import { personColour, TYPE_COLOUR } from "./colours.ts";
 import { formatRoute } from "./route.ts";
 import { useToast } from "./Toast.tsx";
+import { requestPlay } from "./radio.ts";
 import {
   artistHistory, dayMonthYear, joinNames, monthYear, songHistory, summaryText, verdictSentence,
   type Mark, type Stats,
@@ -231,6 +232,10 @@ export default function TrackDetail({ track, cat, enrich = null, onClose, onTrac
 
         <div className="dt-actions">
           {played && <button className="dt-btn" onClick={traceSong}>Show on timeline</button>}
+          {sid && artistName && (
+            <button className="dt-btn" onClick={() => requestPlay({ mode: "song", songId: sid })}
+              title="Play a 30-second preview (cosmic radio)">▶ Preview</button>
+          )}
           {sh && <button className="dt-btn" onClick={copySummary}>Copy summary</button>}
         </div>
         <div className="dt-actions dt-outlinks">

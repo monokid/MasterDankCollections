@@ -3,6 +3,8 @@
 
 [hidden] { display: none !important; }
 main.scroll:focus { outline: none; }
+/* Room for the cosmic radio's bar while it plays (set by Player.tsx; 0 otherwise). */
+.scroll:not(.is-home) { padding-bottom: var(--player-h, 0px); }
 
 .mdc-sr {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;

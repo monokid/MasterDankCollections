@@ -34,6 +34,7 @@ import {
 } from "./artistalbums.ts";
 import { fmtDuration } from "./songcols.ts";
 import "./pages.css";
+import { requestPlay } from "./radio.ts";
 import "./music.css";
 import "./songrows.css";
 import "./musicartists.css";
@@ -656,6 +657,11 @@ function LibraryWall({ wall, facts, cov, cat, enrich, filters, sort, compact, so
             </div>
           )}
           {!artists && compact && <ColumnsMenu columns={allCols} choice={choice} onToggle={toggleCol} onReset={resetCols} />}
+          <button type="button" className="fchip" disabled={!pool.length}
+            title="Play the songs now shown here in a random order, 30 seconds each (cosmic radio)"
+            onClick={() => requestPlay({ mode: "library", songIds: pool.map((s) => s.songId) })}>
+            <span aria-hidden="true">▶</span> Shuffle these
+          </button>
           <div className="mu-surprise">
             <button type="button" className={`fchip mu-dice${rolling !== null ? " rolling" : ""}`}
               disabled={!pool.length} onClick={surprise}>
@@ -876,6 +882,11 @@ function ArtistView({ cat, enrich, wall, facts, artistId, order, fallbackOrder, 
             ))}
           </div>
           <div className="mu-acts">
+            <button type="button" className="dr-btn ghost"
+              onClick={() => requestPlay({ mode: "artist", artistId })}
+              title="Play this artist's songs in a random order, 30 seconds each (cosmic radio)">
+              ▶ Play this artist
+            </button>
             <button type="button" className="dr-btn ghost"
               onClick={() => onTrace({ kind: "artist", id: artistId, label: agg.name, nights: new Set(h.nightList.map((n) => n.eventId)) })}>
               Show on the timeline

@@ -21,6 +21,7 @@ import ColumnsMenu, { useColumnChoice, useViewportWidth } from "./ColumnsMenu.ts
 import { gridTemplate, songFactsFor, sortRows, visibleColumns, type Column } from "./songcols.ts";
 import { nightColumns, rowView } from "./nightlist.ts";
 import { useSessionState } from "./hooks.ts";
+import { requestPlay } from "./radio.ts";
 import { fmtClock, MAPPING_RULE, simText, simulateNight, type Sim, type SimBlock, type SimRow } from "./nightsim.ts";
 import "./pages.css";
 import "./nightsound.css";
@@ -558,9 +559,13 @@ export default function NightPage({ cat, ev, weather, enrich = null, onBack, onG
               {view === "sim"
                 ? <span>The Time column is the elapsed time when each song starts.</span>
                 : <span>Click a heading to sort within each list; again to reverse, once more for play order.</span>}
-              {view === "sim"
-                ? <ColumnsMenu columns={simAll} choice={simChoice} onToggle={toggleSimCol} onReset={resetSimCols} />
-                : <ColumnsMenu columns={allCols} choice={choice} onToggle={toggleCol} onReset={resetCols} />}
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 12 }}>
+                <button type="button" className="linkbtn" onClick={() => requestPlay({ mode: "night", eventId: ev.id })}
+                  title="Play this night's songs in a random order, 30 seconds each (cosmic radio)">▶ Shuffle this night</button>
+                {view === "sim"
+                  ? <ColumnsMenu columns={simAll} choice={simChoice} onToggle={toggleSimCol} onReset={resetSimCols} />
+                  : <ColumnsMenu columns={allCols} choice={choice} onToggle={toggleCol} onReset={resetCols} />}
+              </span>
             </div>
             {sim && (
               <div className="sim-note">

@@ -8,6 +8,8 @@ const ROWS: Array<[keys: string[][], what: string]> = [
   [[["g"], ["b"]], "Go to Browse"],
   [[["g"], ["p"]], "Go to People"],
   [[["g"], ["i"]], "Go to Insights"],
+  [[["r"]], "Cosmic radio: play a random song, or skip"],
+  [[["Space"]], "Pause or resume the radio"],
   [[["Esc"]], "Close a track, or this box"],
   [[["?"]], "Show this help"],
 ];

@@ -1,0 +1,152 @@
+/* The cosmic radio: a quiet pill at the bottom of every page, a slim glass bar
+ * when it plays. Its own stacking level (above the page, below dialogs and the
+ * unlock flood); the scroll area makes room through --player-h (core.css). */
+
+.rd-pill, .rd-bar { z-index: 20; }
+
+/* ------------------------------------------------------------------- pill */
+.rd-pill {
+  position: fixed; left: 50%; bottom: max(12px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  appearance: none; cursor: pointer; font: inherit; font-size: 12px; letter-spacing: 0.04em;
+  padding: 5px 13px 5px 11px; border-radius: 999px; color: var(--ink-dim);
+  background: color-mix(in srgb, var(--panel-solid) 55%, transparent);
+  border: 1px solid var(--panel-edge);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  opacity: 0.8;
+  box-shadow: 0 0 14px rgba(185, 140, 255, 0.18);
+  animation: rd-breathe 5.5s ease-in-out infinite;
+  transition: opacity 0.2s, color 0.2s, border-color 0.2s;
+}
+.rd-pill:hover, .rd-pill:focus-visible { opacity: 1; color: var(--ink); border-color: var(--accent); }
+.rd-star { color: var(--hot); display: inline-block; margin-right: 2px; }
+@keyframes rd-breathe {
+  0%, 100% { box-shadow: 0 0 10px rgba(185, 140, 255, 0.14), 0 0 0 rgba(98, 232, 255, 0); }
+  50% { box-shadow: 0 0 22px rgba(185, 140, 255, 0.36), 0 0 40px rgba(98, 232, 255, 0.12); }
+}
+
+/* -------------------------------------------------------------------- bar */
+.rd-bar {
+  --fc: var(--accent);
+  position: fixed; left: 50%; bottom: max(10px, env(safe-area-inset-bottom));
+  width: min(780px, calc(100vw - 24px)); min-height: 56px;
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 10px;
+  border-radius: 18px; color: var(--ink);
+  background: color-mix(in srgb, var(--panel-solid) 80%, transparent);
+  border: 1px solid var(--panel-edge);
+  backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  box-shadow: var(--shadow), 0 0 30px color-mix(in srgb, var(--fc) 20%, transparent);
+  animation: rd-in 0.28s var(--ease-out);
+}
+@keyframes rd-in { from { opacity: 0; transform: translateX(-50%) translateY(10px) scale(0.92); } }
+.rd-bar.is-full { align-items: flex-start; }
+
+.rd-cover { flex: none; width: 38px; height: 38px; border-radius: 9px; overflow: hidden; }
+.rd-text { flex: 1 1 0; min-width: 0; display: grid; gap: 1px; }
+.rd-line1 {
+  display: flex; align-items: baseline; min-width: 0; white-space: nowrap; overflow: hidden;
+  font-size: 13.5px; font-weight: 600;
+}
+.rd-title, .rd-artist { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.rd-artist { color: var(--ink-dim); font-weight: 500; flex: 0 1 auto; }
+.rd-dot { color: var(--ink-faint); flex: none; white-space: pre; }
+.rd-link {
+  appearance: none; background: none; border: 0; padding: 0; font: inherit; cursor: pointer; color: inherit;
+  text-align: left; border-radius: 4px;
+}
+.rd-link:hover { text-decoration: underline; color: var(--accent-2); }
+.rd-line2 { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11.5px; color: var(--ink-faint); white-space: nowrap; }
+.rd-state { overflow: hidden; text-overflow: ellipsis; }
+.rd-label::before { content: "·"; margin-right: 8px; }
+.rd-none { white-space: normal; }
+.rd-none a, .rd-fulllinks a { color: var(--accent); }
+.rd-none a:hover, .rd-fulllinks a:hover { color: var(--ink); }
+.rd-fulllinks { font-size: 11.5px; color: var(--ink-dim); white-space: normal; }
+.rd-fulllinks a { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; }
+
+/* The progress hairline doubles as the seek bar. */
+.rd-seek {
+  position: absolute; left: 16px; right: 16px; top: -7px; width: auto; height: 14px; margin: 0;
+  appearance: none; -webkit-appearance: none; background: transparent; cursor: pointer;
+  --p: 0%;
+}
+.rd-seek::-webkit-slider-runnable-track {
+  height: 2px; border-radius: 2px;
+  background: linear-gradient(to right, var(--fc) var(--p), rgba(255, 255, 255, 0.14) var(--p));
+}
+.rd-seek::-moz-range-track { height: 2px; border-radius: 2px; background: rgba(255, 255, 255, 0.14); }
+.rd-seek::-moz-range-progress { height: 2px; border-radius: 2px; background: var(--fc); }
+.rd-seek::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 11px; height: 11px; margin-top: -4.5px; border-radius: 50%;
+  background: var(--fc); border: 0; transform: scale(0); transition: transform 0.15s;
+}
+.rd-seek::-moz-range-thumb { width: 11px; height: 11px; border-radius: 50%; background: var(--fc); border: 0; transform: scale(0); transition: transform 0.15s; }
+.rd-bar:hover .rd-seek::-webkit-slider-thumb, .rd-seek:focus-visible::-webkit-slider-thumb { transform: scale(1); }
+.rd-bar:hover .rd-seek::-moz-range-thumb, .rd-seek:focus-visible::-moz-range-thumb { transform: scale(1); }
+.rd-seek:focus-visible { outline: none; }
+.rd-seek:focus-visible::-webkit-slider-runnable-track { outline: 2px solid var(--ring); outline-offset: 3px; }
+
+/* controls */
+.rd-ctl { flex: none; display: flex; align-items: center; gap: 2px; }
+.rd-btn {
+  appearance: none; cursor: pointer; font: inherit; color: var(--ink-dim);
+  display: inline-grid; place-items: center; min-width: 34px; height: 34px; padding: 0 8px; border-radius: 999px;
+  background: transparent; border: 1px solid transparent;
+}
+.rd-btn:hover:not(:disabled):not([aria-disabled="true"]) { color: var(--ink); background: var(--tint); }
+.rd-btn:disabled, .rd-btn[aria-disabled="true"] { opacity: 0.4; cursor: default; }
+.rd-play { color: var(--ink); border-color: var(--panel-edge); }
+.rd-fullbtn { font-size: 12px; padding: 0 11px; border-color: var(--panel-edge); white-space: nowrap; }
+.rd-fullbtn[aria-pressed="true"] { color: var(--ink); border-color: var(--accent); }
+.rd-vol { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-faint); margin: 0 2px 0 4px; }
+.rd-vol input { width: 70px; accent-color: var(--accent); }
+
+/* pool menu */
+.rd-poolwrap { position: relative; min-width: 0; flex: 0 1 auto; }
+.rd-pool {
+  appearance: none; background: none; border: 0; padding: 1px 4px; margin-left: -4px; border-radius: 6px; cursor: pointer;
+  font: inherit; color: var(--ink-dim); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rd-pool:hover { color: var(--ink); background: var(--tint); }
+.rd-menu {
+  position: absolute; left: -6px; bottom: calc(100% + 8px); z-index: 2; min-width: 250px; padding: 6px;
+  display: grid; gap: 2px; border-radius: 14px; white-space: normal;
+  background: var(--panel-solid); border: 1px solid var(--panel-edge); box-shadow: var(--shadow);
+}
+.rd-opt {
+  appearance: none; cursor: pointer; font: inherit; text-align: left; color: var(--ink);
+  display: grid; gap: 1px; padding: 7px 10px; border-radius: 9px; background: transparent; border: 0;
+}
+.rd-opt b { font-size: 13px; font-weight: 600; }
+.rd-opt span { font-size: 11.5px; color: var(--ink-faint); }
+.rd-opt:hover:not(:disabled), .rd-opt[aria-pressed="true"] { background: var(--tint); }
+.rd-opt:disabled { opacity: 0.45; cursor: default; }
+
+/* the Spotify embed replaces the player area */
+.rd-embed { flex: 2 1 280px; min-width: 0; max-width: 420px; display: grid; gap: 4px; }
+.rd-embed iframe { border: 0; border-radius: 12px; display: block; color-scheme: normal; }
+.rd-embed p { margin: 0; font-size: 11.5px; line-height: 1.35; color: var(--ink-faint); }
+.rd-embed .rd-link { color: var(--accent); }
+
+/* the focus ring is the global one; just keep it inside the glass */
+.rd-btn:focus-visible, .rd-link:focus-visible, .rd-pool:focus-visible, .rd-opt:focus-visible { outline-offset: 0; }
+
+/* toasts rise above the bar while it is open */
+:root .toast-host { bottom: calc(26px + var(--player-h, 0px)); }
+
+@media (max-width: 720px) {
+  .rd-vol, .rd-label { display: none; }
+  .rd-bar { gap: 8px; padding: 8px; }
+  .rd-fullbtn { padding: 0 8px; }
+  .rd-bar.is-full { flex-wrap: wrap; }
+  .rd-embed { flex-basis: 100%; max-width: none; order: 5; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rd-pill { animation: none; }
+  .rd-bar { animation: none; }
+  .rd-seek::-webkit-slider-thumb, .rd-seek::-moz-range-thumb { transition: none; }
+}
+
+@media print { .rd-pill, .rd-bar { display: none !important; } }
