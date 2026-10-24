@@ -5,6 +5,7 @@ import { TrackRow, fmtDate } from "./rows.tsx";
 import { catalogIndex } from "./catalogIndex.ts";
 import { isShown } from "./config.ts";
 import type { Range } from "./analytics.ts";
+import type { EnrichMap } from "./enrich.ts";
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
@@ -50,8 +51,9 @@ function TraceList({ cat, trace, onOpen }: {
 /** The Timeline view: the chart, the lit-up list under it, and the side panel for a picked night. */
 export default function TimelinePage({
   cat, trace, setTrace, selected, setSelected, range, setRange,
-  onInsights, onOpen, onOpenNight, onTrace,
+  onInsights, onOpen, onOpenNight, onTrace, enrich,
 }: {
+  enrich?: EnrichMap | null;
   cat: Catalog;
   trace: Trace | null; setTrace: (t: Trace | null) => void;
   selected: string | null; setSelected: (id: string | null) => void;
@@ -73,7 +75,7 @@ export default function TimelinePage({
           <Timeline
             cat={cat} trace={trace} onClearTrace={() => setTrace(null)}
             selected={selected} onSelect={setSelected}
-            range={range} onRange={setRange} onInsights={onInsights} />
+            range={range} onRange={setRange} onInsights={onInsights} enrich={enrich} />
           {trace && <TraceList cat={cat} trace={trace} onOpen={onOpen} />}
         </div>
         {selected && (

@@ -12,7 +12,99 @@ import { fmtCount, fmtDate as short, fmtDateLong as long, fmtHours, fmtSpan, pct
 import { copyText, scrollRootOf, sectionAt, setlistText, splitSet } from "./pagehelpers.ts";
 import { useToast } from "./Toast.tsx";
 import { ChevronIcon, CopyIcon } from "./icons.tsx";
+import { coverageLine, factLines, soundOf, worthShowing, type Sound } from "./nightsound.ts";
+import { familyColour, familyLabel } from "./families.ts";
+import type { EnrichMap } from "./enrich.ts";
 import "./pages.css";
+import "./nightsound.css";
+
+const hue = (id: string, salt: number) => {
+  let h = salt;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return h % 360;
+};
+
+/** A cover on a generative base; a failed image just disappears. */
+function Tile({ songId, url, title, onClick }: { songId: string; url: string; title: string; onClick?: () => void }) {
+  const [bad, setBad] = useState(false);
+  const style = { ["--h1" as string]: hue(songId, 7), ["--h2" as string]: hue(songId, 131), ["--ang" as string]: `${hue(songId, 3)}deg` };
+  const img = !bad && (
+    <img src={url} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setBad(true)} />
+  );
+  return onClick
+    ? <button className="ns-tile" style={style} title={title} aria-label={`Open ${title}`} onClick={onClick}>{img}</button>
+    : <span className="ns-tile" style={style} title={title}>{img}</span>;
+}
+
+/** One 100% bar of genre families; every segment is also named in `legend`. */
+function FamilyBar({ sound, small }: { sound: Sound; small?: boolean }) {
+  const total = sound.familyKnown;
+  return (
+    <div className={`ns-bar${small ? " small" : ""}`} role="img"
+      aria-label={`Genre families: ${sound.families.map((f) => `${familyLabel(f.family)} ${f.count}`).join(", ")}`}>
+      {sound.families.map((f) => (
+        <span key={f.family} tabIndex={small ? undefined : 0}
+          data-tip={`${familyLabel(f.family)} · ${plural(f.count, "song")} · ${pct(f.count / total)}`}
+          style={{ flexGrow: f.count, background: familyColour(f.family) }} />
+      ))}
+    </div>
+  );
+}
+
+function SoundCard({ sound, onOpen }: { sound: Sound; onOpen: (t: Track) => void }) {
+  const facts = factLines(sound);
+  const peak = Math.max(1, ...sound.decades.map((d) => d.count));
+  return (
+    <section className="nsound" aria-label="The sound of this night">
+      <h2>The sound of this night</h2>
+      <p className="ns-cov">{coverageLine(sound)}</p>
+      <div className="ns-grid">
+        {sound.covers.length > 0 && (
+          <div>
+            <h3 className="ns-h">Covers</h3>
+            <div className="ns-mosaic">
+              {sound.covers.map((c) => (
+                <Tile key={c.songId} songId={c.songId} url={c.url}
+                  title={c.artist ? `${c.title} · ${c.artist}` : c.title} onClick={() => onOpen(c.track)} />
+              ))}
+            </div>
+          </div>
+        )}
+        <div>
+          {sound.families.length > 0 && (
+            <>
+              <h3 className="ns-h">Genre families · {sound.familyKnown} of {sound.songs} songs</h3>
+              <FamilyBar sound={sound} />
+              <ul className="ns-legend">
+                {sound.families.map((f) => (
+                  <li key={f.family} style={{ ["--fc" as string]: familyColour(f.family) }}>
+                    <i />{familyLabel(f.family)} <b>{f.count}</b>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {sound.decades.length > 0 && (
+            <>
+              <h3 className="ns-h" style={{ marginTop: 16 }}>Music from these decades · {sound.yearKnown} songs with a known year</h3>
+              <div className="ns-decades" role="img"
+                aria-label={sound.decades.map((d) => `${d.decade}: ${plural(d.count, "song")}`).join(", ")}>
+                {sound.decades.map((d) => (
+                  <div key={d.decade} className="ns-dec" title={`${d.decade}: ${plural(d.count, "song")}`}>
+                    <b>{d.count}</b>
+                    <div className={`col${d.count ? "" : " zero"}`} style={{ height: `${(d.count / peak) * 62}%` }} />
+                    <span>{d.decade}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {facts.length > 0 && <ul className="ns-facts">{facts.map((f) => <li key={f}>{f}</li>)}</ul>}
+        </div>
+      </div>
+    </section>
+  );
+}
 
 /** Where each night was scrolled to, so coming back from a track lands there. */
 const scrollMemory = new Map<string, number>();
@@ -22,8 +114,8 @@ const jokeTitle = (e: Event) =>
 
 const BAR_GAP = 28;   // clearance under the sticky bar when a section is scrolled to
 
-export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: {
-  cat: Catalog; ev: Event; weather: WeatherMap;
+export default function NightPage({ cat, ev, weather, enrich = null, onBack, onGoto, onOpen }: {
+  cat: Catalog; ev: Event; weather: WeatherMap; enrich?: EnrichMap | null;
   onBack: () => void; onGoto: (id: string) => void; onOpen: (t: Track) => void;
 }) {
   const barRef = useRef<HTMLDivElement>(null);
@@ -73,6 +165,19 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
     });
     return { stats, sets, copies: tracks.filter((t) => !t.played).length };
   }, [cat, ev.id]);
+
+  const sound = useMemo(() => soundOf(cat.tracks.filter((t) => t.eventId === ev.id), enrich), [cat, ev.id, enrich]);
+  const showSound = worthShowing(sound);
+  // Each person's own mix, from their played tracks; only worth a bar with a few songs behind it.
+  const personSound = useMemo(() => {
+    const m = new Map<string, Sound>();
+    if (!showSound) return m;
+    for (const s of sets) {
+      const x = soundOf(s.played, enrich);
+      if (x.familyKnown >= 3) m.set(s.pid, x);
+    }
+    return m;
+  }, [sets, enrich, showSound]);
 
   // A new night starts at the top. The first one shown is the exception: coming
   // back from a track, the page returns to where it was.
@@ -232,6 +337,8 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
           {isNight && ev.date && <Sky date={ev.date} weather={weather[ev.date]} large />}
         </header>
 
+        {showSound && <SoundCard sound={sound} onOpen={onOpen} />}
+
         {sets.map(({ pid, stat, colour, person, others, split }) => {
           const loose = split.loose;
           const named = person?.name ?? (stat.label || "Shared");
@@ -261,6 +368,17 @@ export default function NightPage({ cat, ev, weather, onBack, onGoto, onOpen }: 
               </div>
 
               <div className="pbody" id={`set-${key}`}>
+              {personSound.has(pid) && (
+                <div className="ns-person">
+                  <FamilyBar sound={personSound.get(pid)!} small />
+                  <p>
+                    {personSound.get(pid)!.families.slice(0, 4)
+                      .map((f) => `${familyLabel(f.family)} ${f.count}`).join(" · ")}
+                    {personSound.get(pid)!.families.length > 4 ? " · …" : ""}
+                    {` · ${personSound.get(pid)!.familyKnown} of ${personSound.get(pid)!.songs} songs known`}
+                  </p>
+                </div>
+              )}
               {person && split.ordered.length > 0 && split.ordered.every((t) => t.flags.includes("anon")) && (
                 <p className="anon-note">
                   Only anonymised files survive for this list, so there are no song names. A playlist

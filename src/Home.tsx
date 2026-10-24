@@ -2,7 +2,10 @@
  *  The site is private, so touching it (or Enter, or Skip) first asks for the word
  *  (Gate); once the vault is open the screen floods with the creature's colours
  *  (Wash, below) and lands on Search. */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { EnrichMap } from "./enrich.ts";
+import { homeLines, homeSound } from "./timelinesound.ts";
+import "./timelinesound.css";
 import { createAmoeba, type Amoeba } from "./amoeba.ts";
 import Gate, { type GateControl } from "./Gate.tsx";
 import { hasSession, resume, unlock } from "./vault.ts";
@@ -100,7 +103,10 @@ function Stats({ t }: { t: Partial<Teaser> }) {
   );
 }
 
-export default function Home({ onEnter, leaving: leavingProp }: {
+export default function Home({ onEnter, leaving: leavingProp, enrich = null, songTotal }: {
+  /** Only there once the vault has opened (so on a return to Home, not the first visit). */
+  enrich?: EnrichMap | null;
+  songTotal?: number;
   /** The vault is open: start the click-through from this point (viewport px). */
   onEnter: (x: number, y: number) => void;
   /** Optional: Home tracks this itself; accepted so an older caller still compiles. */
@@ -124,6 +130,7 @@ export default function Home({ onEnter, leaving: leavingProp }: {
   const [leaving, setLeaving] = useState(false);
   const [teaser, setTeaser] = useState<Partial<Teaser> | null>(null);
   const [night, setNight] = useState({ k: 0, on: false });
+  const soundLines = useMemo(() => homeLines(homeSound(enrich, songTotal)), [enrich, songTotal]);
 
   useLayoutEffect(() => {
     const a = createAmoeba(hostRef.current!, {
@@ -294,6 +301,9 @@ export default function Home({ onEnter, leaving: leavingProp }: {
         <p className="home-hint"><span className="hint-touch">touch the amoeba</span>
           <span className="hint-key"> · press Enter</span></p>
         {teaser && <Stats t={teaser} />}
+        {soundLines.length > 0 && (
+          <p className="home-sound">{soundLines.map((l) => <span key={l}>{l}</span>)}</p>
+        )}
       </footer>
 
       {gate !== "closed" && (

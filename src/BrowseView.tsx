@@ -5,14 +5,15 @@ import { lazyPage } from "./lazy.ts";
 import { catalogIndex } from "./catalogIndex.ts";
 import { isShown } from "./config.ts";
 import type { WeatherMap } from "./weather.ts";
+import type { EnrichMap } from "./enrich.ts";
 import Loader from "./Loader.tsx";
 
 /** One night's page is its own chunk: the list of nights does not need it. */
 export const NightPage = lazyPage(() => import("./NightPage.tsx"));
 
 /** Browse: the list of nights, or one night when `eventId` is set. */
-export default function BrowseView({ cat, weather, onOpen, eventId, setEventId }: {
-  cat: Catalog; weather: WeatherMap; onOpen: (t: Track) => void;
+export default function BrowseView({ cat, weather, enrich = null, onOpen, eventId, setEventId }: {
+  cat: Catalog; weather: WeatherMap; enrich?: EnrichMap | null; onOpen: (t: Track) => void;
   eventId: string | null; setEventId: (id: string | null) => void;
 }) {
   // The night we just left, so the list can scroll back to its card. Derived
@@ -28,11 +29,11 @@ export default function BrowseView({ cat, weather, onOpen, eventId, setEventId }
   const ev = found && isShown(found) ? found : null;
 
   if (!ev) {
-    return <EventsList cat={cat} weather={weather} focusId={from} onOpenNight={setEventId} />;
+    return <EventsList cat={cat} weather={weather} enrich={enrich} focusId={from} onOpenNight={setEventId} />;
   }
   return (
     <Suspense fallback={<Loader />}>
-      <NightPage cat={cat} ev={ev} weather={weather} onOpen={onOpen}
+      <NightPage cat={cat} ev={ev} weather={weather} enrich={enrich} onOpen={onOpen}
         onBack={() => setEventId(null)} onGoto={setEventId} />
     </Suspense>
   );

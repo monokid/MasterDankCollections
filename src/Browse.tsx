@@ -8,7 +8,15 @@ import Sky from "./Sky.tsx";
 import type { WeatherMap } from "./weather.ts";
 import { fmtCount, fmtHours, plural } from "./format.ts";
 import { useSessionState } from "./hooks.ts";
+import type { EnrichMap } from "./enrich.ts";
+import { familyLabel } from "./families.ts";
+import EnrichChips from "./EnrichChips.tsx";
+import {
+  factOf, filterNights, NIGHT_MIN_SHARE, NIGHT_MIN_SONGS, nightFacets, nightSound, NO_SEL,
+  selActive, unknownWhat, universe, type Fact, type Sel,
+} from "./enrichfilter.ts";
 import "./pages.css";
+import "./enrichfilter.css";
 
 const dateParts = (iso: string | null) => {
   if (!iso) return null;
@@ -26,8 +34,11 @@ const jokeTitle = (e: Event) =>
 
 const scrollRoot = (el: Element | null) => el?.closest(".scroll") as HTMLElement | null;
 
-function NightCard({ ev, cat, weather, flash, onOpen }: {
-  ev: Event; cat: Catalog; weather?: WeatherMap; flash: boolean; onOpen: () => void;
+function NightCard({ ev, cat, weather, flash, sound, onOpen }: {
+  ev: Event; cat: Catalog; weather?: WeatherMap; flash: boolean;
+  /** "mostly rock, 1990s–2000s", when enough of the night is known. */
+  sound?: { text: string; known: number; total: number } | null;
+  onOpen: () => void;
 }) {
   const d = dateParts(ev.date);
   const title = jokeTitle(ev);
@@ -55,6 +66,12 @@ function NightCard({ ev, cat, weather, flash, onOpen }: {
         </div>
       </div>
       {title && <div className="nc-title">{title}</div>}
+      {sound && (
+        <div className="nc-sound"
+          title={`From the ${sound.known} of this night's ${sound.total} songs with a genre or year on file`}>
+          {sound.text}
+        </div>
+      )}
 
       <div className="nc-stats">
         <span><b>{fmtCount(ev.playedCount)}</b> tracks</span>
@@ -81,8 +98,9 @@ function NightCard({ ev, cat, weather, flash, onOpen }: {
   );
 }
 
-export default function EventsList({ cat, weather, focusId, onOpenNight }: {
-  cat: Catalog; weather: WeatherMap; focusId: string | null; onOpenNight: (id: string) => void;
+export default function EventsList({ cat, weather, enrich = null, focusId, onOpenNight }: {
+  cat: Catalog; weather: WeatherMap; enrich?: EnrichMap | null;
+  focusId: string | null; onOpenNight: (id: string) => void;
 }) {
   // The sort and the kind filter outlive a visit to a night (and the tab).
   const [newestFirst, setNewestFirst] = useSessionState("browse.newest", true);
@@ -104,8 +122,47 @@ export default function EventsList({ cat, weather, focusId, onOpenNight }: {
     return [...n.entries()].sort((a, b) => b[1] - a[1]);
   }, [nights]);
 
+  // Genre / decade chips, remembered for the tab. Without enrichment: no chips, no filter.
+  const [fams, setFams] = useSessionState<string[]>("browse.fam", []);
+  const [decs, setDecs] = useSessionState<string[]>("browse.dec", []);
+  const sel = useMemo<Sel>(() => (enrich ? { families: fams, decades: decs } : NO_SEL), [enrich, fams, decs]);
+  const enrichOn = selActive(sel);
+  const setSel = useCallback((s: Sel) => { setFams(s.families); setDecs(s.decades); }, [setFams, setDecs]);
+
+  // Each night's songs, once each (a song is one id however many copies, twins or
+  // Spotify duplicates it has), as what enrichment knows about them.
+  const nightFacts = useMemo(() => {
+    const by = new Map<string, Fact[]>();
+    if (!enrich) return by;
+    for (const s of cat.songs) {
+      const f = factOf(enrich, s.id);
+      for (const id of s.nights) {
+        let list = by.get(id);
+        if (!list) by.set(id, list = []);
+        list.push(f);
+      }
+    }
+    return by;
+  }, [cat, enrich]);
+  const sounds = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof nightSound>>();
+    for (const [id, facts] of nightFacts) m.set(id, nightSound(facts, familyLabel));
+    return m;
+  }, [nightFacts]);
+  const uni = useMemo(
+    () => universe(enrich ? cat.songs.map((s) => factOf(enrich, s.id)) : []), [cat, enrich]);
+
+  const kindNights = useMemo(() => nights.filter((e) => !kind || e.types.includes(kind)), [nights, kind]);
+  const judged = useMemo(
+    () => filterNights(kindNights.map((e) => ({ key: e.id, facts: nightFacts.get(e.id) ?? [] })), sel),
+    [kindNights, nightFacts, sel]);
+  const facets = useMemo(
+    () => nightFacets(kindNights.map((e) => nightFacts.get(e.id) ?? []), sel,
+      { families: uni.families.map(([f]) => f), decades: uni.decades.map(([d]) => d) }),
+    [kindNights, nightFacts, sel, uni]);
+
   const years = useMemo(() => {
-    const shown = nights.filter((e) => !kind || e.types.includes(kind));
+    const shown = kindNights.filter((e) => !enrichOn || judged.keep.has(e.id));
     const by = new Map<string, Event[]>();
     for (const e of shown) {
       const y = e.date?.slice(0, 4) ?? "????";
@@ -117,7 +174,7 @@ export default function EventsList({ cat, weather, focusId, onOpenNight }: {
     // January to December, left to right (`nights` is already date-sorted).
     if (newestFirst) list.reverse();
     return list.map(([year, evs]) => ({ year, evs }));
-  }, [nights, kind, newestFirst]);
+  }, [kindNights, enrichOn, judged, newestFirst]);
   const allYears = useMemo(
     () => [...new Set(nights.map((e) => e.date?.slice(0, 4) ?? "????"))].sort(), [nights]);
   const shownYears = new Set(years.map((y) => y.year));
@@ -177,8 +234,10 @@ export default function EventsList({ cat, weather, focusId, onOpenNight }: {
   useEffect(() => {
     if (!pending) return;
     if (flash(pending.id, pending.smooth)) { setPending(null); return; }
-    if (kind) setKind(null); else setPending(null);
-  }, [pending, years, kind, flash, setKind]);
+    if (kind) setKind(null);
+    else if (enrichOn) setSel(NO_SEL);
+    else setPending(null);
+  }, [pending, years, kind, enrichOn, flash, setKind, setSel]);
 
   const jumpLatest = () => { if (latest) setPending({ id: latest.id, smooth: true }); };
 
@@ -211,13 +270,28 @@ export default function EventsList({ cat, weather, focusId, onOpenNight }: {
         </div>
       </div>
 
+      {enrich && (uni.families.length > 0 || uni.decades.length > 0) && (
+        <EnrichChips universe={uni} counts={facets} sel={sel} onChange={setSel}
+          hint={(enrichOn
+            ? `${judged.keep.size} of ${kindNights.length} nights${judged.unjudged
+              ? ` (${judged.unjudged} ${judged.unjudged === 1 ? "has" : "have"} no songs with a ${unknownWhat(sel)} on file and ${judged.unjudged === 1 ? "is" : "are"} hidden)`
+              : ""}. `
+            : "") +
+            `A night matches when at least ${NIGHT_MIN_SONGS} of its songs, or ${Math.round(NIGHT_MIN_SHARE * 100)}% of those with data, fit.`} />
+      )}
+
       <div className="bgrid">
         <div className="bmain">
           {years.length === 0 && (
             <div className="empty">
               <div className="big" aria-hidden="true">◌</div>
-              <div>No nights to show{kind ? <> for “{kind}”.</> : "."}</div>
-              {kind && <div className="emptyacts"><button className="dr-btn ghost" onClick={() => setKind(null)}>Show all nights</button></div>}
+              <div>No nights to show{kind ? <> for “{kind}”</> : ""}{enrichOn ? " with those genre and decade chips" : ""}.</div>
+              {(kind || enrichOn) && (
+                <div className="emptyacts">
+                  {kind && <button className="dr-btn ghost" onClick={() => setKind(null)}>Show all nights</button>}
+                  {enrichOn && <button className="dr-btn ghost" onClick={() => setSel(NO_SEL)}>Clear genre and decade</button>}
+                </div>
+              )}
             </div>
           )}
           {years.map(({ year, evs }) => (
@@ -229,7 +303,7 @@ export default function EventsList({ cat, weather, focusId, onOpenNight }: {
               <div className="ngrid">
                 {evs.map((e) => (
                   <NightCard key={e.id} ev={e} cat={cat} weather={weather}
-                    flash={flashId === e.id} onOpen={() => onOpenNight(e.id)} />
+                    flash={flashId === e.id} sound={sounds.get(e.id)} onOpen={() => onOpenNight(e.id)} />
                 ))}
               </div>
             </section>

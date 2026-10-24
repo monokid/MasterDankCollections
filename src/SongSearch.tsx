@@ -30,37 +30,58 @@ import {
   consumeFocusRequest, FOCUS_SEARCH_EVENT, getSearchQuery, setSearchQuery, subscribeSearchQuery,
 } from "./events.ts";
 import { useToast } from "./Toast.tsx";
+import EnrichChips, { Thumb } from "./EnrichChips.tsx";
+import { coverUrlOf, familyOf, yearOf, type EnrichMap } from "./enrich.ts";
+import { familyColour, familyLabel } from "./families.ts";
+import {
+  coverage, factOf, NO_SEL, passes, selActive, songFacets, summarise, summaryText, universe,
+  type Sel,
+} from "./enrichfilter.ts";
 import { CloseIcon, CopyIcon, SearchIcon } from "./icons.tsx";
 import "./pages.css";
+import "./enrichfilter.css";
 
 const BATCH = 120;   // rows added each time the list grows
 
 /** What survives leaving the page for a track and coming back (not a reload). */
 const memo_ = { scroll: 0, open: null as string | null, limit: BATCH };
 
-const GroupRow = memo(function GroupRow({ g, isOpen, q, lk, onToggle, onOpen, onTrace }: {
-  g: Group; isOpen: boolean; q: string; lk: Lookups;
+const GroupRow = memo(function GroupRow({ g, isOpen, q, lk, enrich, onToggle, onOpen, onTrace }: {
+  g: Group; isOpen: boolean; q: string; lk: Lookups; enrich: EnrichMap | null;
   onToggle: (g: Group) => void; onOpen: (t: Track) => void; onTrace: (t: Trace) => void;
 }) {
   const solo = g.tracks.length === 1;
+  const rec = enrich && g.songId ? enrich[g.songId] : undefined;
+  const fam = familyOf(rec), yr = yearOf(rec);
   return (
     <div className={`songgroup${isOpen ? " open" : ""}`}>
       <button className="row" aria-expanded={solo ? undefined : isOpen}
         title={solo ? "Open this track" : isOpen ? "Hide the nights" : "Show every night it was played"}
         onClick={() => onToggle(g)}>
-        <div className="t">
-          <Marked value={g.title} query={q} />
-          {g.variants.slice(0, 2).map((v) => (
-            <span key={v} className="chip variant">{v}</span>
-          ))}
-          {g.nights > 1 && (
-            <span className="chip recurs" title={`Played on ${g.nights} nights`}>
-              {g.nights} nights
+        <div className={enrich ? "t ef-t" : "t"}>
+          {enrich && <Thumb songId={g.songId ?? g.key} url={coverUrlOf(rec)} />}
+          <span className={enrich ? "ef-tt" : undefined}>
+            <Marked value={g.title} query={q} />
+            {g.variants.slice(0, 2).map((v) => (
+              <span key={v} className="chip variant">{v}</span>
+            ))}
+            {g.nights > 1 && (
+              <span className="chip recurs" title={`Played on ${g.nights} nights`}>
+                {g.nights} nights
+              </span>
+            )}
+            {g.anon && <span className="chip anon">anon</span>}
+          </span>
+        </div>
+        <div className="a">
+          <Marked value={g.artist ?? "—"} query={q} />
+          {(fam || yr) && (
+            <span className="ef-quiet" title={[fam && familyLabel(fam), yr && `released ${yr}`].filter(Boolean).join(", ")}>
+              {fam && <span className="ef-dot" style={{ background: familyColour(fam) }} />}
+              {yr}
             </span>
           )}
-          {g.anon && <span className="chip anon">anon</span>}
         </div>
-        <div className="a"><Marked value={g.artist ?? "—"} query={q} /></div>
         <div className="p">
           {g.people.length
             ? g.people.slice(0, 2).join(", ") + (g.people.length > 2 ? ` +${g.people.length - 2}` : "")
@@ -100,8 +121,10 @@ const GroupRow = memo(function GroupRow({ g, isOpen, q, lk, onToggle, onOpen, on
   );
 });
 
-export default function SongSearch({ cat, onOpen, onTrace, initialQuery, onQueryChange }: {
+export default function SongSearch({ cat, enrich = null, onOpen, onTrace, initialQuery, onQueryChange }: {
   cat: Catalog;
+  /** Release year / genre family / cover per song; null until (or unless) it exists. */
+  enrich?: EnrichMap | null;
   onOpen: (t: Track) => void;
   onTrace: (t: Trace) => void;
   /** Optional extra way in for a query from the URL (#/search?q=..). The shared
@@ -115,6 +138,8 @@ export default function SongSearch({ cat, onOpen, onTrace, initialQuery, onQuery
   const [personId, setPersonId] = useSessionState("search.person", "");
   const [year, setYear] = useSessionState("search.year", "");
   const [type, setType] = useSessionState("search.type", "");
+  const [fams, setFams] = useSessionState<string[]>("search.fam", []);
+  const [decs, setDecs] = useSessionState<string[]>("search.dec", []);
   const [sortPref, setSortPref] = useSessionState<SortKey | "auto">("search.sort", "auto");
   const [open, setOpenRaw] = useState<string | null>(memo_.open);
   const [limit, setLimitRaw] = useState(memo_.limit);
@@ -200,23 +225,42 @@ export default function SongSearch({ cat, onOpen, onTrace, initialQuery, onQuery
   const q = dq.trim();
   const stale = dq !== query;
 
-  const { groups: raw, plays } = useMemo(() => {
+  // Genre / decade chips. Without enrichment they do not exist, whatever was remembered.
+  const sel = useMemo<Sel>(() => (enrich ? { families: fams, decades: decs } : NO_SEL), [enrich, fams, decs]);
+  const enrichOn = selActive(sel);
+  const libFacts = useMemo(() => cat.songs.map((s) => factOf(enrich, s.id)), [cat, enrich]);
+  const uni = useMemo(() => universe(libFacts), [libFacts]);
+  const libCov = useMemo(() => coverage(libFacts), [libFacts]);
+
+  const { groups: raw0, plays: plays0 } = useMemo(() => {
     // Searching ranks tracks; an empty query takes everything, so the landing
     // page can lead with what the library plays most.
     const hits = search(index, dq, {
-      includeAnon, personId: personId || null, limit: q ? 3000 : 20000,
+      includeAnon, personId: personId || null, limit: q && !enrichOn ? 3000 : 20000,
     });
     return groupHits(hits, lk, { year, type });
-  }, [index, dq, q, includeAnon, personId, year, type, lk]);
+  }, [index, dq, q, includeAnon, personId, year, type, lk, enrichOn]);
 
+  // Chips narrow what the text and the other filters found; counts are faceted on it.
+  const facts0 = useMemo(
+    () => (enrich ? raw0.map((g) => factOf(enrich, g.songId)) : []), [raw0, enrich]);
+  const facets = useMemo(() => songFacets(facts0, sel), [facts0, sel]);
+  const sum = useMemo(() => summarise(facts0, sel), [facts0, sel]);
+  const { groups: raw, plays } = useMemo(() => {
+    if (!enrichOn) return { groups: raw0, plays: plays0 };
+    const kept = raw0.filter((_, i) => passes(facts0[i], sel));
+    return { groups: kept, plays: kept.reduce((n, g) => n + g.tracks.length, 0) };
+  }, [raw0, plays0, facts0, sel, enrichOn]);
+
+  // With no text, filters alone list songs A to Z (nothing else is a sensible order).
   const sort: SortKey = sortPref === "auto" || (sortPref === "match" && !q)
-    ? (q ? "match" : "nights") : sortPref;
+    ? (q ? "match" : enrichOn ? "az" : "nights") : sortPref;
   const groups = useMemo(() => sortGroups(raw, sort, !!q), [raw, sort, q]);
   const shown = useMemo(() => groups.slice(0, limit), [groups, limit]);
   const filtered = !!(personId || year || type);
 
   // A new question starts at the top with nothing unfolded.
-  useOnChange([dq, includeAnon, personId, year, type, sort].join("|"), () => {
+  useOnChange([dq, includeAnon, personId, year, type, sort, fams.join(","), decs.join(",")].join("|"), () => {
     setOpen(null);
     setLimit(() => BATCH);
     scrollRootOf(inputRef.current)?.scrollTo({ top: 0, behavior: "instant" });
@@ -239,6 +283,7 @@ export default function SongSearch({ cat, onOpen, onTrace, initialQuery, onQuery
   }, [onOpen, setOpen]);
 
   const clearFilters = () => { setPersonId(""); setYear(""); setType(""); };
+  const setSel = (s: Sel) => { setFams(s.families); setDecs(s.decades); };
 
   const onInputKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown") {
@@ -336,10 +381,10 @@ export default function SongSearch({ cat, onOpen, onTrace, initialQuery, onQuery
             Include anonymised ({fmtCount(cat.stats.anonTracks)})
           </label>
           <span className="rcount" aria-live="polite">
-            {plural(groups.filter((g) => g.songId).length, "song")}
-            {groups.some((g) => !g.songId) && ` + ${fmtCount(groups.filter((g) => !g.songId).length)} without an artist`}
+            {enrichOn ? summaryText(sum, sel) : plural(groups.filter((g) => g.songId).length, "song")}
+            {!enrichOn && groups.some((g) => !g.songId) && ` + ${fmtCount(groups.filter((g) => !g.songId).length)} without an artist`}
             {" · "}{plural(plays, "play")}
-            {!q && !filtered && ` · ${SORT_LABEL[sort].toLowerCase()} first`}
+            {!q && !filtered && !enrichOn && ` ·${SORT_LABEL[sort].toLowerCase()} first`}
             {q && (
               <button className="linkbtn" onClick={() => void copyLink()} title="Copy a link to this search">
                 <CopyIcon size={13} /> copy link
@@ -349,17 +394,25 @@ export default function SongSearch({ cat, onOpen, onTrace, initialQuery, onQuery
         </div>
       </div>
 
+      {enrich && (uni.families.length > 0 || uni.decades.length > 0) && (
+        <EnrichChips universe={uni} counts={facets} sel={sel} onChange={setSel}
+          hint={`${fmtCount(libCov.either)} of ${fmtCount(libCov.total)} songs have a genre or year on file; the rest are hidden while a chip is on.`} />
+      )}
+
       {groups.length === 0 ? (
         <div className="empty">
           <div className="big" aria-hidden="true">◌</div>
           <div>
-            {q
+            {q && enrichOn
+              ? <>No song matches “{q}” with those genre and decade chips.</>
+              : q
               ? <>No song or artist matches “{q}”. Try fewer words, or a different spelling.</>
               : "Nothing matches those filters."}
           </div>
           <div className="emptyacts">
             {q && <button className="dr-btn ghost" onClick={() => setQuery("")}>Clear search</button>}
             {filtered && <button className="dr-btn ghost" onClick={clearFilters}>Clear filters</button>}
+            {enrichOn && <button className="dr-btn ghost" onClick={() => setSel(NO_SEL)}>Clear genre and decade</button>}
             {!includeAnon && cat.stats.anonTracks > 0 && (
               <button className="dr-btn ghost" onClick={() => setIncludeAnon(true)}>
                 Include {fmtCount(cat.stats.anonTracks)} anonymised tracks
@@ -368,9 +421,9 @@ export default function SongSearch({ cat, onOpen, onTrace, initialQuery, onQuery
           </div>
         </div>
       ) : (
-        <div className={`rows resultlist${stale ? " stale" : ""}`} ref={listRef} onKeyDown={onListKey}>
+        <div className={`rows resultlist${stale ? " stale" : ""}${enrich ? " ef-rich" : ""}`} ref={listRef} onKeyDown={onListKey}>
           {shown.map((g) => (
-            <GroupRow key={g.key} g={g} isOpen={open === g.key} q={q} lk={lk}
+            <GroupRow key={g.key} g={g} isOpen={open === g.key} q={q} lk={lk} enrich={enrich}
               onToggle={toggle} onOpen={onOpen} onTrace={onTrace} />
           ))}
           {shown.length < groups.length && (

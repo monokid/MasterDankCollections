@@ -2,6 +2,14 @@ import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import type { Catalog, Track } from "./catalog.ts";
 import type { Trace } from "./Timeline.tsx";
 import { catalogIndex } from "./catalogIndex.ts";
+import Cover from "./Cover.tsx";
+import { coverUrlOf, type EnrichMap } from "./enrich.ts";
+import { familyColour } from "./families.ts";
+import { buildWall } from "./musicstats.ts";
+import {
+  gapSentence, hasFacts, moreFromArtist, neighbours, notFoundLine, poolOf, sourceNote, songFacts,
+  type PoolSong,
+} from "./songfacts.ts";
 import { fmtDur } from "./format.ts";
 import { copyText, spotifyUrl } from "./pagehelpers.ts";
 import { personColour, TYPE_COLOUR } from "./colours.ts";
@@ -25,8 +33,11 @@ const BUCKET_WORDS: Record<string, string> = {
 /** One track: what the library knows about the song and artist, and where
  *  each field of this file came from. `onOpenNight` / `onOpenTrack` are optional;
  *  without them the links fall back to the hash routes (#/night/.., #/song/..). */
-export default function TrackDetail({ track, cat, onClose, onTrace, onOpenNight, onOpenTrack, onOpenArtist, onOpenPerson }: {
-  track: Track; cat: Catalog; onClose: () => void; onTrace: (t: Trace) => void;
+export default function TrackDetail({ track, cat, enrich = null, onClose, onTrace, onOpenNight, onOpenTrack, onOpenArtist, onOpenPerson }: {
+  track: Track; cat: Catalog;
+  /** Public-database facts; null when none shipped. Partial by nature. */
+  enrich?: EnrichMap | null;
+  onClose: () => void; onTrace: (t: Trace) => void;
   onOpenNight?: (eventId: string) => void;
   onOpenTrack?: (t: Track) => void;
   /** Open the artist on the Music page / a person on the People page. */
@@ -105,6 +116,54 @@ export default function TrackDetail({ track, cat, onClose, onTrace, onOpenNight,
   const hasArtistPage = !!artistId && ix.artist.has(artistId);
 
   const played = sh && sh.nights > 0;
+
+  // ---- enrichment (every piece is optional: null enrich, no record, no match)
+  const rec = enrich && sid ? enrich[sid] : undefined;
+  const facts = songFacts(rec);
+  const coverUrl = coverUrlOf(rec);
+  const gap = played ? gapSentence(facts.year, +sh.first!.date.slice(0, 4)) : null;
+  const notFound = sid ? notFoundLine(enrich, rec) : null;
+  const srcNote = sourceNote(rec);
+  const wall = useMemo(() => buildWall(cat), [cat]);
+  const pool = useMemo<PoolSong[]>(() => poolOf(wall.songs, enrich), [wall, enrich]);
+  const alike = useMemo(
+    () => (sid ? neighbours({ songId: sid, year: facts.year, family: facts.family }, pool) : null),
+    [sid, facts.year, facts.family, pool],
+  );
+  const sameArtist = useMemo(
+    () => (sid && artistId ? moreFromArtist(sid, pool.filter((s) => s.artistId === artistId)) : []),
+    [sid, artistId, pool],
+  );
+  /** A track to open for each song (prefer one that was brought to a night). */
+  const openable = useMemo(() => {
+    const m = new Map<string, Track>();
+    for (const t of cat.tracks) {
+      if (!t.songId) continue;
+      const cur = m.get(t.songId);
+      if (!cur || (!cur.played && t.played)) m.set(t.songId, t);
+    }
+    return m;
+  }, [cat]);
+  const simRows = (songs: PoolSong[]) => (
+    <ul className="dt-sim">
+      {songs.map((s) => {
+        const t = openable.get(s.songId);
+        if (!t) return null;
+        const f = enrich?.[s.songId];
+        return (
+          <li key={s.songId}>
+            {trackLink(t.id, (
+              <>
+                <Cover songId={s.songId} title={s.title} artist={s.artist} url={coverUrlOf(f)} size={40} />
+                <span className="dt-simtext"><b>{s.title}</b><span>{s.artist || "unknown artist"}</span></span>
+                <span className="dt-simn">×{s.nights} {s.nights === 1 ? "night" : "nights"}</span>
+              </>
+            ), "dt-simrow")}
+          </li>
+        );
+      })}
+    </ul>
+  );
   const spot = spotifyUrl(track.spotifyUri);
   const q = track.audio;
 
@@ -113,6 +172,9 @@ export default function TrackDetail({ track, cat, onClose, onTrace, onOpenNight,
       <button className="backlink" onClick={onClose}>← back</button>
 
       <header className="panel dt-head">
+        <div className="dt-headrow">
+          {sid && <Cover songId={sid} title={title ?? "?"} artist={artistName ?? undefined} url={coverUrl} size={112} />}
+          <div>
         <h1>{title ?? "(untitled)"}</h1>
         <p className="dt-artist">
           {artistName && hasArtistPage
@@ -129,6 +191,18 @@ export default function TrackDetail({ track, cat, onClose, onTrace, onOpenNight,
               : <span>{artistName ?? "unknown artist"}</span>}
           {person && <span className="dt-by"> · brought by {personLink(person.name)}</span>}
         </p>
+
+        {hasFacts(facts) ? (
+          <p className="dt-factsline">
+            {facts.year !== null && <span>released {facts.year}</span>}
+            {facts.family && (
+              <span><i className="dt-fam" style={{ background: familyColour(facts.family) }} />{facts.familyName}</span>
+            )}
+            {facts.country && <span>{facts.country}</span>}
+          </p>
+        ) : notFound && <p className="dt-quiet">{notFound}</p>}
+          </div>
+        </div>
 
         <p className="dt-verdict" data-verdict={sh?.verdict ?? "unknown"}>
           {sh
@@ -157,6 +231,7 @@ export default function TrackDetail({ track, cat, onClose, onTrace, onOpenNight,
           {sh && <button className="dt-btn" onClick={copySummary}>Copy summary</button>}
           {spot && <a className="dt-btn" href={spot} target="_blank" rel="noreferrer">Open in Spotify ↗</a>}
         </div>
+        {srcNote && <p className="dt-quiet">{srcNote}</p>}
       </header>
 
       {sh && !played && (
@@ -186,6 +261,7 @@ export default function TrackDetail({ track, cat, onClose, onTrace, onOpenNight,
                       : undefined} />
                 </div>
               )}
+            {gap && <p className="dt-note">{gap[0].toUpperCase() + gap.slice(1)}.</p>}
           </section>
 
           <section className="panel dt-card" aria-labelledby="dt-who">
@@ -330,6 +406,25 @@ export default function TrackDetail({ track, cat, onClose, onTrace, onOpenNight,
                 {ah.songCount} songs brought in all.{" "}
                 <button className="dt-linkbtn" onClick={traceArtist}>Show {ah.name} on the timeline →</button>
               </p>
+            </section>
+          )}
+        </div>
+      )}
+
+      {(alike || sameArtist.length > 0) && (
+        <div className="dt-grid">
+          {alike && (
+            <section className="panel dt-card" aria-labelledby="dt-like">
+              <h2 id="dt-like">Sounds like this</h2>
+              <p className="dt-sub">Also in the library: {alike.label}. Least-brought first.</p>
+              {simRows(alike.songs)}
+            </section>
+          )}
+          {sameArtist.length > 0 && (
+            <section className="panel dt-card" aria-labelledby="dt-more">
+              <h2 id="dt-more">More from this artist</h2>
+              <p className="dt-sub">Also in the library, by {artistName ?? "the same artist"}.</p>
+              {simRows(sameArtist)}
             </section>
           )}
         </div>

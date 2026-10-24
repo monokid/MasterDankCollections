@@ -442,21 +442,21 @@ export default function App() {
   const validArtist = cat && artistId && catalogIndex(cat).artist.has(artistId) ? artistId : null;
   let page;
   if (!cat || (view === "home" && !detail)) {
-    page = <Home leaving={wash !== null} onEnter={enter} />;
+    page = <Home leaving={wash !== null} onEnter={enter} enrich={enrich} />;
   } else if (detail) {
-    page = <TrackDetail track={detail} cat={cat} onClose={closeDetail} onTrace={onTrace} onOpenNight={openNight} onOpenTrack={open}
+    page = <TrackDetail track={detail} cat={cat} enrich={enrich} onClose={closeDetail} onTrace={onTrace} onOpenNight={openNight} onOpenTrack={open}
         onOpenArtist={openArtist} onOpenPerson={openPerson} />;
   } else if (view === "search") {
-    page = <SongSearch cat={cat} onOpen={open} onTrace={onTrace} />;
+    page = <SongSearch cat={cat} enrich={enrich} onOpen={open} onTrace={onTrace} />;
   } else if (view === "timeline") {
     page = (
-      <TimelinePage cat={cat} trace={trace} setTrace={setTrace}
+      <TimelinePage cat={cat} enrich={enrich} trace={trace} setTrace={setTrace}
         selected={selectedNight} setSelected={setSelectedNight}
         range={range} setRange={setRange} onInsights={onInsights}
         onOpen={open} onOpenNight={openNight} onTrace={onTrace} />
     );
   } else if (view === "browse") {
-    page = <BrowseView cat={cat} weather={weather} onOpen={open} eventId={eventId} setEventId={setNight} />;
+    page = <BrowseView cat={cat} weather={weather} enrich={enrich} onOpen={open} eventId={eventId} setEventId={setNight} />;
   } else if (view === "music") {
     page = (
       <MusicPage cat={cat} enrich={enrich} artistId={validArtist} onOpenArtist={openArtist}

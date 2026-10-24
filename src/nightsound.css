@@ -1,0 +1,54 @@
+/* "The sound of this night" card and the per-person family bars. */
+.nsound {
+  margin: 18px 0 8px; padding: 16px 18px 18px; border: 1px solid var(--panel-edge); border-radius: 14px;
+  background: rgba(150, 120, 255, 0.06);
+}
+.nsound h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.ns-cov { margin: 2px 0 12px; font-size: 12.5px; color: var(--ink-dim); }
+.ns-grid { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 22px; align-items: start; }
+@media (max-width: 760px) { .ns-grid { grid-template-columns: 1fr; } }
+.ns-h { margin: 0 0 6px; font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-dim); font-weight: 600; }
+
+.ns-mosaic { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.ns-tile {
+  position: relative; aspect-ratio: 1; border-radius: 6px; overflow: hidden; padding: 0; border: 0; display: block;
+  background: linear-gradient(var(--ang, 135deg), hsl(var(--h1, 260) 55% 36%), hsl(var(--h2, 320) 55% 26%));
+}
+button.ns-tile { cursor: pointer; appearance: none; }
+button.ns-tile:hover, button.ns-tile:focus-visible { outline: 2px solid var(--accent, #b98cff); outline-offset: 1px; z-index: 1; }
+.ns-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+.ns-bar { display: flex; height: 22px; gap: 1px; }
+.ns-bar > span { position: relative; min-width: 3px; outline-offset: 1px; }
+.ns-bar > span:first-child { border-radius: 6px 0 0 6px; }
+.ns-bar > span:last-child { border-radius: 0 6px 6px 0; }
+.ns-bar > span:only-child { border-radius: 6px; }
+.ns-bar.small { height: 8px; }
+.ns-bar > span[data-tip]::after {
+  content: attr(data-tip); position: absolute; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%);
+  white-space: nowrap; font-size: 12px; padding: 3px 8px; border-radius: 6px; pointer-events: none; z-index: 5;
+  background: rgba(24, 18, 56, 0.97); border: 1px solid var(--panel-edge); color: var(--ink); opacity: 0;
+}
+.ns-bar > span:hover::after, .ns-bar > span:focus-visible::after { opacity: 1; }
+.ns-bar > span:focus-visible { outline: 2px solid var(--ink); }
+
+.ns-legend { display: flex; flex-wrap: wrap; gap: 5px 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.ns-legend li {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--panel-edge); color: var(--ink);
+}
+.ns-legend i { width: 9px; height: 9px; border-radius: 50%; background: var(--fc); flex: none; }
+.ns-legend b { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink-dim); }
+
+.ns-decades { display: flex; align-items: flex-end; gap: 6px; height: 92px; margin-top: 16px; }
+.ns-dec { flex: 1 1 0; max-width: 64px; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; font-size: 11.5px; color: var(--ink-dim); }
+.ns-dec .col { width: 100%; border-radius: 4px 4px 0 0; background: var(--accent, #b98cff); opacity: 0.8; min-height: 0; }
+.ns-dec .col.zero { background: none; border-bottom: 1px dashed var(--panel-edge); }
+.ns-dec b { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); }
+.ns-facts { margin: 14px 0 0; padding: 0; list-style: none; font-size: 13.5px; display: grid; gap: 3px; }
+
+.ns-person { margin: 4px 0 10px; max-width: 460px; }
+.ns-person .ns-bar { height: 8px; }
+.ns-person p { margin: 4px 0 0; font-size: 11.5px; color: var(--ink-dim); }
+
+@media print { .ns-bar > span::after { display: none; } }

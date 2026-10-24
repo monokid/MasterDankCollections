@@ -23,6 +23,11 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Catalog, Event } from "./catalog.ts";
 import { cumulative, type Range } from "./analytics.ts";
 import { TYPE_COLOUR, nightColour, personColour } from "./colours.ts";
+import type { EnrichMap } from "./enrich.ts";
+import { familyColour, familyLabel } from "./families.ts";
+import { legendCounts, nightSounds, type NightSound } from "./timelinesound.ts";
+import { useSessionState } from "./hooks.ts";
+import "./timelinesound.css";
 
 export interface Trace {
   kind: "song" | "artist" | "person";
@@ -72,11 +77,20 @@ interface LayerProps {
   upTo: number | null;
   /** Still in the intro: bars arrive one after another. */
   stagger: boolean;
+  /** Sound mode: each night's sound. Null in the usual night-type colouring. */
+  sounds: Map<string, NightSound> | null;
+  /** Sound mode: the family being looked at (legend hover, focus or pin). */
+  highlight: string | null;
 }
+
+const NEUTRAL = "hsl(240 8% 46%)";
+/** Sound mode's colour for a night: its dominant family, or grey when too little is known. */
+const soundColour = (s: NightSound | undefined) =>
+  s?.enough && s.dominant ? familyColour(s.dominant) : NEUTRAL;
 
 /** Bars and lane marks, at the current zoom, unpanned (the parent translates). */
 const NightsLayer = memo(function NightsLayer(p: LayerProps) {
-  const { nights, times, people, attended, t0, span, plotW, z, lo, hi, barW, barsH, axisY, lanesY, longest, trace, selected, inRange, upTo, stagger } = p;
+  const { nights, times, people, attended, t0, span, plotW, z, lo, hi, barW, barsH, axisY, lanesY, longest, trace, selected, inRange, upTo, stagger, sounds, highlight } = p;
   const out: React.ReactElement[] = [];
   for (let i = 0; i < nights.length; i++) {
     const ms = times[i];
@@ -85,9 +99,11 @@ const NightsLayer = memo(function NightsLayer(p: LayerProps) {
     const x = GUTTER + ((ms - t0) / span) * plotW * z;
     const h = 16 + (n.durationSec / longest) * (barsH - 36);
     const on = (!trace || trace.nights.has(n.id)) && (upTo === null || i < upTo);
-    const colour = nightColour(n);
+    const snd = sounds?.get(n.id);
+    const colour = sounds ? soundColour(snd) : nightColour(n);
     const isSel = selected === n.id;
-    const faded = inRange && !inRange.has(n.id) ? 0.4 : 1;
+    const lit = !sounds || !highlight || (snd?.enough && snd.dominant === highlight);
+    const faded = (inRange && !inRange.has(n.id) ? 0.4 : 1) * (lit ? 1 : 0.18);
     const op = (on ? (isSel ? 1 : 0.84) : 0.1) * faded;
     const who = attended.get(n.id);
     out.push(
@@ -118,8 +134,9 @@ const NightsLayer = memo(function NightsLayer(p: LayerProps) {
 });
 
 /** The overview strip's bars: static unless the trace changes. */
-const MiniBars = memo(function MiniBars({ nights, times, t0, span, plotW, longest, trace }: {
+const MiniBars = memo(function MiniBars({ nights, times, t0, span, plotW, longest, trace, sounds, highlight }: {
   nights: Event[]; times: number[]; t0: number; span: number; plotW: number; longest: number; trace: Trace | null;
+  sounds: Map<string, NightSound> | null; highlight: string | null;
 }) {
   return (
     <>
@@ -128,7 +145,9 @@ const MiniBars = memo(function MiniBars({ nights, times, t0, span, plotW, longes
         const x = GUTTER + ((times[i] - t0) / span) * plotW;
         return (
           <rect key={n.id} x={x - 1.2} y={44 - h} width={2.4} height={h}
-            fill={nightColour(n)} opacity={trace && !trace.nights.has(n.id) ? 0.15 : 0.8} />
+            fill={sounds ? soundColour(sounds.get(n.id)) : nightColour(n)}
+            opacity={(trace && !trace.nights.has(n.id) ? 0.15 : 0.8)
+              * (sounds && highlight && !(sounds.get(n.id)?.enough && sounds.get(n.id)?.dominant === highlight) ? 0.2 : 1)} />
         );
       })}
     </>
@@ -138,7 +157,7 @@ const MiniBars = memo(function MiniBars({ nights, times, t0, span, plotW, longes
 // --------------------------------------------------------------- component
 
 export default function Timeline({
-  cat, trace, onClearTrace, selected, onSelect, range, onRange, onInsights,
+  cat, trace, onClearTrace, selected, onSelect, range, onRange, onInsights, enrich = null,
 }: {
   cat: Catalog;
   trace: Trace | null;
@@ -148,6 +167,8 @@ export default function Timeline({
   range: Range | null;
   onRange: (r: Range | null) => void;
   onInsights: () => void;
+  /** Genre and year per song; absent until the vault has opened, and partial. */
+  enrich?: EnrichMap | null;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(1100);
@@ -187,6 +208,19 @@ export default function Timeline({
     for (const e of nights) m.set(e.id, new Set(e.people));
     return m;
   }, [nights]);
+  // Sound mode: only offered when enrichment exists. The choice is remembered for the tab session.
+  const [colourBy, setColourBy] = useSessionState<"type" | "sound">("timeline.colourBy", "type");
+  const [pinFam, setPinFam] = useState<string | null>(null);
+  const [lookFam, setLookFam] = useState<string | null>(null);
+  const allSounds = useMemo(() => (enrich ? nightSounds(cat.tracks, enrich) : null), [cat, enrich]);
+  const sounds = enrich && colourBy === "sound" ? allSounds : null;
+  const highlight = sounds ? lookFam ?? pinFam : null;
+  const legend = useMemo(() => {
+    if (!allSounds) return [];
+    return legendCounts(nights.map((n) => allSounds.get(n.id)).filter((s): s is NightSound => !!s));
+  }, [allSounds, nights]);
+  const thinNights = useMemo(
+    () => (allSounds ? nights.filter((n) => !allSounds.get(n.id)?.enough).length : 0), [allSounds, nights]);
   const byId = useMemo(() => new Map(nights.map((n) => [n.id, n])), [nights]);
   const personName = useMemo(() => new Map(people.map((p) => [p.id, p.name])), [people]);
 
@@ -461,6 +495,14 @@ export default function Timeline({
     return { nights: ns.length, hours: ns.reduce((s, n) => s + n.durationSec, 0) / 3600 };
   }, [nights, inRangeSet]);
 
+  const selectedSound = (() => {
+    const s = sounds && selectedNight ? sounds.get(selectedNight.id) : null;
+    if (!s) return "";
+    return s.enough && s.dominant
+      ? `, mostly ${familyLabel(s.dominant)} (${Math.round(s.share * 100)}%)`
+      : ", not enough known songs to say what it sounded like";
+  })();
+
   const upTo = playhead === null ? null : countUpTo(times, playhead);
   const now = playhead === null ? null : at[(upTo ?? 0) - 1] ?? { nights: 0, songs: 0, canon: 0, people: 0 };
 
@@ -529,6 +571,46 @@ export default function Timeline({
           </>
         )}
       </div>
+
+      {enrich && (
+        <div className="tl-sound">
+          <span className="tl-dim" id="tl-colourby">Colour by</span>
+          <span role="group" aria-labelledby="tl-colourby" className="tls-toggle">
+            <button className={`tl-zoom${colourBy === "type" ? " on" : ""}`} aria-pressed={colourBy === "type"}
+              title="The kind of night: roll, trip and so on"
+              onClick={() => setColourBy("type")}>Night type</button>
+            <button className={`tl-zoom${colourBy === "sound" ? " on" : ""}`} aria-pressed={colourBy === "sound"}
+              title="The genre family most of the night's known songs belong to"
+              onClick={() => setColourBy("sound")}>Sound</button>
+          </span>
+          {colourBy === "sound" && (
+            <>
+              <ul className="tls-legend" aria-label="Genre families, with the number of nights each leads">
+                {legend.map(({ family, nights: k }) => (
+                  <li key={family}>
+                    <button className={`tls-chip${pinFam === family ? " on" : ""}`}
+                      aria-pressed={pinFam === family}
+                      title={`${k} night${k === 1 ? "" : "s"} led by ${familyLabel(family)}. Click to show only those.`}
+                      onMouseEnter={() => setLookFam(family)} onMouseLeave={() => setLookFam(null)}
+                      onFocus={() => setLookFam(family)} onBlur={() => setLookFam(null)}
+                      onClick={() => setPinFam(pinFam === family ? null : family)}>
+                      <i className="tls-sw" style={{ background: familyColour(family) }} aria-hidden="true" />
+                      {familyLabel(family)} <b>{k}</b>
+                    </button>
+                  </li>
+                ))}
+                <li className="tls-thin">
+                  <i className="tls-sw grey" aria-hidden="true" />
+                  not enough known <b>{thinNights}</b>
+                </li>
+              </ul>
+              <span className="tl-dim tls-note">
+                Genres are known for part of the library; a night needs 30% of its songs known to take a colour.
+              </span>
+            </>
+          )}
+        </div>
+      )}
 
       {now && playhead !== null && (
         <div className="tl-readout">
@@ -628,7 +710,7 @@ export default function Timeline({
                   t0={t0} span={span} plotW={plotW} z={view.z} lo={lo} hi={hi}
                   barW={barW} barsH={barsH} axisY={axisY} lanesY={lanesY} longest={longest}
                   trace={trace} selected={selected} inRange={inRangeSet} upTo={upTo}
-                  stagger={!settled} />
+                  stagger={!settled} sounds={sounds} highlight={highlight} />
               </g>
 
               {playhead !== null && (() => {
@@ -658,6 +740,22 @@ export default function Timeline({
             <div className="tl-dim">
               {hovered.people.map((id) => personName.get(id)).filter(Boolean).join(", ")}
             </div>
+            {sounds && (() => {
+              const s = sounds.get(hovered.id);
+              if (!s) return <div className="tl-dim">no song data for this night</div>;
+              return s.enough && s.dominant ? (
+                <div className="tls-tip">
+                  mostly <b style={{ color: familyColour(s.dominant) }}>{familyLabel(s.dominant)}</b> ({Math.round(s.share * 100)}%
+                  {" "}of {s.known} known songs)
+                  {s.decade ? ` · median decade ${s.decade}s` : ""}
+                </div>
+              ) : (
+                <div className="tls-tip">
+                  not enough known ({s.known} of {s.total} songs, {Math.round(s.coverage * 100)}%)
+                  {s.decade ? ` · median decade ${s.decade}s` : ""}
+                </div>
+              );
+            })()}
             {hovered.types.length > 0 && (
               <div className="tl-types">
                 {hovered.types.map((t) => (
@@ -675,7 +773,8 @@ export default function Timeline({
         onPointerMove={(e) => { if (e.buttons === 1) miniTo(e.clientX); }}>
         <text x={14} y={30} className="tl-lane">overview</text>
         <rect x={GUTTER} y={6} width={plotW} height={40} rx={6} className="tl-minibg" />
-        <MiniBars nights={nights} times={times} t0={t0} span={span} plotW={plotW} longest={longest} trace={trace} />
+        <MiniBars nights={nights} times={times} t0={t0} span={span} plotW={plotW} longest={longest} trace={trace}
+          sounds={sounds} highlight={highlight} />
         {range && (
           <rect x={GUTTER + ((Date.parse(range.from) - t0) / span) * plotW} y={6}
             width={Math.max(((Date.parse(range.to) - Date.parse(range.from)) / span) * plotW, 2)} height={40}
@@ -691,7 +790,7 @@ export default function Timeline({
         {" "}<b>← →</b> step through nights (click the chart first) · <b>space</b> plays · <b>0</b> resets · <b>esc</b> clears
       </p>
       <span className="tl-sr" aria-live="polite">
-        {selectedNight ? `Selected ${selectedNight.date}${selectedNight.title ? `, ${selectedNight.title}` : ""}` : ""}
+        {selectedNight ? `Selected ${selectedNight.date}${selectedNight.title ? `, ${selectedNight.title}` : ""}${selectedSound}` : ""}
       </span>
     </div>
   );
