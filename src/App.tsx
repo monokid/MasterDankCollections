@@ -16,7 +16,7 @@ import { getBundle, hasSession, prefetch, resume, type Bundle } from "./vault.ts
 import type { WeatherMap } from "./weather.ts";
 import type { EnrichMap } from "./enrich.ts";
 import type { Range } from "./analytics.ts";
-import { HOME, formatRoute, parseRoute, titleFor, type Route } from "./route.ts";
+import { HOME, formatRoute, parseRoute, titleFor, type InsightsTab, type Route } from "./route.ts";
 import { createKeyMachine, isTypingTarget, type GotoView } from "./keys.ts";
 import { getSearchQuery, requestSearchFocus, setSearchQuery, subscribeSearchQuery } from "./events.ts";
 
@@ -47,7 +47,7 @@ function lastView(): MenuView {
   return "search";
 }
 
-function routeOf(view: View, detail: Track | null, eventId: string | null, personId: string | null, artistId: string | null): Route {
+function routeOf(view: View, detail: Track | null, eventId: string | null, personId: string | null, artistId: string | null, insightsTab: InsightsTab): Route {
   if (detail) return { name: "song", id: detail.id };
   switch (view) {
     case "home": return HOME;
@@ -55,6 +55,7 @@ function routeOf(view: View, detail: Track | null, eventId: string | null, perso
     case "browse": return eventId ? { name: "night", id: eventId } : { name: "browse" };
     case "people": return { name: "people", id: personId };
     case "music": return { name: "music", id: artistId };
+    case "insights": return { name: "insights", tab: insightsTab };
     default: return { name: view };
   }
 }
@@ -85,6 +86,7 @@ export default function App() {
   const [eventId, setEventId] = useState<string | null>(null);
   const [personId, setPersonId] = useState<string | null>(null);
   const [artistId, setArtistId] = useState<string | null>(null);
+  const [insightsTab, setInsightsTab] = useState<InsightsTab>("overview");
   const [enrich, setEnrich] = useState<EnrichMap | null>(null);
   const [weather, setWeather] = useState<WeatherMap>({});
   const [help, setHelp] = useState(false);
@@ -160,6 +162,11 @@ export default function App() {
         setArtistId(known ? r.id : null); setView("music"); setDetail(null);
         break;
       }
+      case "insights":
+        setInsightsTab(r.tab); setView("insights"); setDetail(null);
+        // An unknown tab was read as Overview: say so in the address bar.
+        if (window.location.hash !== formatRoute(r)) window.history.replaceState({ k: histKey() }, "", formatRoute(r));
+        break;
       default:
         setView(r.name); setDetail(null);
     }
@@ -285,14 +292,14 @@ export default function App() {
   // (the visitor's deep link must survive until it can be followed).
   useLayoutEffect(() => {
     if (!cat || wash) return;
-    const route = routeOf(view, detail, eventId, personId, artistId);
+    const route = routeOf(view, detail, eventId, personId, artistId, insightsTab);
     if (urlIs(route)) return;
     scrolls.current.set(keyNow.current, leavingTop.current);
     keyNow.current = ++keyTop.current;
     window.history.pushState({ k: keyNow.current }, "", formatRoute(route));
     restoreToken.current++;
     scrollRef.current?.scrollTo({ top: 0, behavior: "instant" });
-  }, [cat, wash, view, detail, eventId, personId, artistId]);
+  }, [cat, wash, view, detail, eventId, personId, artistId, insightsTab]);
 
   // The search box reports every keystroke; mirror it quietly (replace, not
   // push, so Back does not step through letters).
@@ -318,7 +325,7 @@ export default function App() {
 
   // ------------------------------------------------------ title & announce
 
-  const route = useMemo(() => routeOf(view, detail, eventId, personId, artistId), [view, detail, eventId, personId, artistId]);
+  const route = useMemo(() => routeOf(view, detail, eventId, personId, artistId, insightsTab), [view, detail, eventId, personId, artistId, insightsTab]);
   const unlocked = cat !== null;
   const night = route.name === "night" ? route.id : null;
   useEffect(() => {
@@ -403,6 +410,7 @@ export default function App() {
     }).catch(() => openArtist(songId.split("|")[0]));
   }, [open, openArtist]);
   const onInsights = useCallback(() => nav(() => setView("insights")), [nav]);
+  const pickInsightsTab = useCallback((t: InsightsTab) => nav(() => setInsightsTab(t)), [nav]);
 
   // Plan and Resolve stay built but are off the menu (#/plan and #/resolve still open them).
   const leftTabs: [View, string][] = [["search", "Search"], ["music", "Music"], ["timeline", "Timeline"]];
@@ -460,7 +468,11 @@ export default function App() {
         onOpenNight={openNight} onOpenSong={openSong} onOpenArtist={openArtist} onTrace={onTrace} />
     );
   } else if (view === "insights") {
-    page = <Insights cat={cat} range={range} onRange={setRange} onTrace={onTrace} onOpenNight={openNight} />;
+    page = (
+      <Insights cat={cat} enrich={enrich} range={range} onRange={setRange} onTrace={onTrace} onOpenNight={openNight}
+        onOpenSong={openSong} onOpenArtist={openArtist} onOpenPerson={openPerson}
+        tab={insightsTab} onTab={pickInsightsTab} />
+    );
   } else if (view === "plan") {
     page = <Planner cat={cat} range={range} onRange={setRange} onTrace={onTrace} onOpenNight={openNight} />;
   } else {

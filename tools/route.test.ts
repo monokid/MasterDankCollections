@@ -15,7 +15,8 @@ test("every route round-trips through the hash", () => {
     { name: "home" }, { name: "search", q: "" }, { name: "search", q: "pink floyd & co / 100%" },
     { name: "search", q: "ünïcode ✓" }, { name: "timeline" }, { name: "browse" },
     { name: "night", id: "2026-05-01" }, { name: "night", id: "collection-favs" },
-    { name: "insights" }, { name: "plan" }, { name: "resolve" }, { name: "song", id: "t123" },
+    { name: "insights", tab: "overview" }, { name: "insights", tab: "music" }, { name: "insights", tab: "people" },
+    { name: "insights", tab: "trends" }, { name: "insights", tab: "nights" }, { name: "plan" }, { name: "resolve" }, { name: "song", id: "t123" },
     { name: "song", id: "a/b?c#d" },
     { name: "people", id: null }, { name: "people", id: "p3" }, { name: "people", id: "a/b c" },
     { name: "music", id: null }, { name: "music", id: "pink floyd" }, { name: "music", id: "a/b?c" },
@@ -42,6 +43,21 @@ test("people and music routes parse as documented, with generic titles", () => {
   assert.equal(titleFor({ name: "people", id: null }), "People · Master Dank Collections");
   assert.equal(titleFor({ name: "people", id: "p3" }), "People · Master Dank Collections", "no names in titles");
   assert.equal(titleFor({ name: "music", id: "a1" }), "Music · Master Dank Collections");
+});
+
+test("insights tabs: #/insights is Overview, a known tab is kept, an unknown one is Overview", () => {
+  assert.deepEqual(parseRoute("#/insights"), { name: "insights", tab: "overview" });
+  assert.deepEqual(parseRoute("#/insights/"), { name: "insights", tab: "overview" });
+  assert.deepEqual(parseRoute("#/insights/nights"), { name: "insights", tab: "nights" });
+  for (const h of ["#/insights/nope", "#/insights/Music", "#/insights/music/x", "#/insights/%E0%A4%A"]) {
+    assert.deepEqual(parseRoute(h), { name: "insights", tab: "overview" }, h);
+  }
+  assert.equal(formatRoute({ name: "insights", tab: "overview" }), "#/insights", "Overview keeps the short address");
+  assert.equal(formatRoute({ name: "insights", tab: "trends" }), "#/insights/trends");
+  // the address App would rewrite an unknown tab to
+  assert.equal(formatRoute(parseRoute("#/insights/nope")), "#/insights");
+  assert.equal(titleFor({ name: "insights", tab: "music" }), "Insights · Master Dank Collections", "the title is generic");
+  assert.equal(titleFor({ name: "insights", tab: "overview" }), titleFor({ name: "insights", tab: "nights" }));
 });
 
 test("empty, unknown and malformed hashes land on Home instead of throwing", () => {

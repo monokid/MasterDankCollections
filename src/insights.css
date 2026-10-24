@@ -1,0 +1,158 @@
+/* The tabbed Insights page: the pinned head (tab strip + KPI strip), the chart
+ * primitives in src/charts.tsx, and the extra drilldown bits. Imported by
+ * src/Insights.tsx. Tokens come from styles.css; small text uses --ink-dim
+ * (--ink-faint is under 4.5:1 on the dark panels). */
+
+/* Scroll anchoring would fight the head's own scroll compensation (Insights.tsx). */
+.ins-main { overflow-anchor: none; }
+.inssec { scroll-margin-top: calc(var(--ins-head, 130px) + 60px); }
+.ins-panel { min-width: 0; }
+.ins-panel:focus { outline: none; }
+
+/* ------------------------------------------------------------------ the head */
+
+.ins-head {
+  position: sticky; top: 0; z-index: 8;
+  margin: 0 -22px 14px; padding: 8px 22px 8px;
+  background: rgba(8, 6, 22, 0.93); backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--panel-edge);
+}
+@media (max-width: 720px) { .ins-head { margin: 0 -14px 12px; padding: 6px 14px; } }
+@media (max-height: 520px) { .ins-head { position: static; } }
+
+.ins-tabrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.ins-tabs { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; min-width: 0; }
+.ins-tabs::-webkit-scrollbar { display: none; }
+.ins-tab {
+  appearance: none; font: inherit; font-size: 13.5px; font-weight: 560; cursor: pointer; white-space: nowrap;
+  color: var(--ink-dim); background: transparent; border: 1px solid transparent;
+  padding: 7px 15px; border-radius: 999px; transition: background 0.14s, color 0.14s;
+}
+.ins-tab:hover { color: var(--ink); background: var(--tint); }
+.ins-tab[aria-selected="true"] { color: var(--ink-on-accent); background: var(--accent); border-color: var(--accent); font-weight: 680; }
+.ins-tab:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+@media (max-width: 900px) { .ins-tabrow { flex-wrap: wrap; } .ins-tabs { flex-basis: 100%; } }
+
+/* The jump chips of a tab stick just under the head. */
+.instoc.ins-chips { top: var(--ins-head, 130px); margin-top: -6px; }
+
+/* -------------------------------------------------------------------- KPIs */
+
+.kpis {
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(126px, 1fr); gap: 8px;
+  overflow-x: auto; padding: 2px 0 4px; scrollbar-width: thin;
+}
+.kpi {
+  appearance: none; font: inherit; color: var(--ink); text-align: left; cursor: pointer; min-width: 0;
+  display: flex; flex-direction: column; gap: 1px; padding: 8px 11px 7px;
+  background: var(--glass); border: 1px solid var(--panel-edge); border-radius: 12px;
+  transition: background 0.14s, border-color 0.14s;
+}
+.kpi:hover { background: rgba(185, 140, 255, 0.16); border-color: var(--accent); }
+.kpi:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.kpi-k { font-size: 11.5px; color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-v { font-size: 23px; font-weight: 690; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.kpi-d { font-size: 11px; color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-d i { font-style: normal; }
+.kpi-spark { margin: 2px 0 1px; }
+.kpis.is-slim { grid-auto-columns: minmax(max-content, 1fr); }
+.is-slim .kpi { flex-direction: row; align-items: baseline; gap: 8px; padding: 4px 11px; border-radius: 999px; }
+.is-slim .kpi-v { font-size: 15px; }
+.is-slim .kpi-k { font-size: 11.5px; }
+
+/* ------------------------------------------------------------- chart cards */
+
+.ichart { min-width: 0; }
+.ich-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.ich-cover {
+  font-size: 11px; padding: 2px 9px; border-radius: 999px; color: var(--ink-dim);
+  border: 1px dashed rgba(185, 140, 255, 0.4); white-space: nowrap;
+}
+.ich-reading { margin: -4px 0 12px; font-size: 13px; line-height: 1.5; color: var(--ink-dim); text-wrap: pretty; }
+.ichart .ich + .ich { margin-top: 12px; }
+
+.ich { position: relative; min-width: 0; }
+.ich svg { display: block; max-width: 100%; overflow: visible; }
+.ich [role="button"] { cursor: pointer; }
+.ich [tabindex]:focus { outline: none; }
+.ich [tabindex]:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+
+.ich-grid { stroke: var(--panel-edge); stroke-width: 1; }
+.ich-axis { stroke: var(--ink-dim); stroke-width: 1; opacity: 0.6; }
+.ich-tick, .ich-val { fill: var(--ink-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.ich-val { fill: var(--ink); }
+.ich-avg { stroke: var(--warn); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.ich-avgtext { fill: var(--warn); font-size: 11px; }
+.ich-bar { transition: filter 0.12s; }
+.ich-bar:hover, .ich-bar:focus-visible { filter: brightness(1.22); }
+.ich-bar.is-hl { stroke: var(--ink); stroke-width: 2; }
+.ich-flag { fill: var(--hot); }
+.ich-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.ich-line.thick { stroke-width: 3.4; }
+.ich-area { opacity: 0.16; stroke: none; }
+.ich-ring { fill: none; stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 2 2; }
+.ich-break { stroke: var(--hot); stroke-width: 1; stroke-dasharray: 4 3; }
+.ich-hit { fill: transparent; }
+.ich-pt.quiet > :not(.ich-hit) { opacity: 0; }
+.ich-pt.quiet:hover > :not(.ich-hit), .ich-pt.quiet:focus-visible > :not(.ich-hit) { opacity: 1; }
+.ich-pt:hover > :not(.ich-hit) { transform-box: fill-box; transform-origin: center; transform: scale(1.25); }
+.ich-spark .ich-line { stroke-width: 1.7; }
+.ich-spark .ich-hit:hover { fill: rgba(98, 232, 255, 0.25); }
+
+.ich-cellbox { stroke: rgba(255, 255, 255, 0.1); stroke-width: 1; }
+.ich-cell:hover .ich-cellbox, .ich-cell:focus-visible .ich-cellbox { stroke: var(--ink); stroke-width: 2; }
+.ich-cellval { font-size: 11px; font-weight: 640; font-variant-numeric: tabular-nums; pointer-events: none; }
+.ich-hatch { stroke: var(--ink-dim); stroke-width: 1; opacity: 0.5; }
+.ich-seg:hover rect, .ich-seg:focus-visible rect { filter: brightness(1.2); }
+.ich-scale { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 11px; color: var(--ink-dim); }
+.ich-scale i { flex: 0 1 150px; height: 8px; border-radius: 4px; }
+
+.ich-toggle { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 12px; color: var(--ink-dim); cursor: pointer; }
+.ich-toggle input { accent-color: var(--accent); }
+
+.ich-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 8px 0 0; padding: 0; font-size: 12px; color: var(--ink-dim); }
+.ich-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.ich-legend i { font-style: normal; color: var(--ink-dim); opacity: 0.8; }
+
+.ich-tip {
+  position: absolute; z-index: 20; pointer-events: none; white-space: nowrap;
+  transform: translate(-50%, calc(-100% - 10px));
+  display: flex; flex-direction: column; gap: 1px; padding: 6px 10px; border-radius: 9px;
+  font-size: 12px; color: var(--ink-dim); background: var(--panel-solid);
+  border: 1px solid var(--panel-edge); box-shadow: var(--shadow);
+}
+.ich-tip b { color: var(--ink); font-weight: 650; }
+
+/* The data table that only a screen reader sees. */
+.ins-sr {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ich-bar { transform-box: fill-box; transform-origin: 50% 100%; animation: ich-grow 0.5s var(--ease-out) both; }
+}
+@keyframes ich-grow { from { transform: scaleY(0.04); opacity: 0.4; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .ich-bar, .ich-tab, .ins-tab, .kpi { animation: none; transition: none; }
+  .ich-pt:hover > :not(.ich-hit) { transform: none; }
+}
+
+/* ------------------------------------------------------------ drill extras */
+
+.dr-body .dr-stats { grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); }
+.dr-body .ich { margin: 4px 0 2px; }
+.dr-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 2px; }
+.dr-table th, .dr-table td { padding: 5px 6px; border-bottom: 1px solid rgba(150, 120, 255, 0.12); font-weight: 400; vertical-align: baseline; }
+.dr-table thead th { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--ink-dim); text-align: right; font-weight: 650; }
+.dr-table thead th:first-child, .dr-table tbody th { text-align: left; }
+.dr-table td { text-align: right; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.dr-link {
+  appearance: none; background: none; border: 0; padding: 0; margin: 0; font: inherit; color: var(--ink);
+  cursor: pointer; text-align: left; border-radius: 4px;
+}
+.dr-link:hover { color: var(--accent); text-decoration: underline; }
+.dr-link:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.dr-link i { display: block; font-style: normal; font-size: 11px; color: var(--ink-dim); }
+
+@media print { .ins-head, .ich-tip, .ich-toggle { display: none !important; } }

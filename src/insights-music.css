@@ -1,0 +1,23 @@
+/* The Music tab's chart sections (src/insights/MusicCharts.tsx). */
+.mi-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 6px; }
+.mi-chip {
+  font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; cursor: pointer;
+  color: var(--ink-dim); background: transparent; border: 1px solid var(--panel-edge);
+}
+.mi-chip:hover { color: var(--ink); border-color: var(--ink-dim); }
+.mi-chip[aria-pressed="true"] { color: var(--ink); border-color: var(--accent); background: rgba(185, 140, 255, 0.16); }
+.mi-chip:focus-visible, .mi-song:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.mi-sub { margin: 18px 0 6px; font-size: 13px; font-weight: 600; color: var(--ink); }
+.mi-hint { margin-top: 6px; font-size: 12px; color: var(--ink-dim); }
+.mi-cover { margin: 0 0 6px; }
+.mi-note { margin: 0 0 14px; font-size: 13px; color: var(--ink-dim); }
+.mi-list { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--panel-edge); border-radius: 10px; }
+.mi-listhead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+.mi-acts { display: inline-flex; gap: 6px; }
+.mi-song {
+  display: flex; justify-content: space-between; gap: 12px; width: 100%; padding: 5px 6px; text-align: left;
+  font: inherit; font-size: 13px; color: var(--ink); background: transparent; border: 0; border-radius: 6px; cursor: pointer;
+}
+.mi-song:hover { background: rgba(255, 255, 255, 0.06); }
+.mi-song i { margin-left: 8px; font-style: normal; color: var(--ink-dim); }
+.mi-song em { font-style: normal; color: var(--ink-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }

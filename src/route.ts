@@ -7,7 +7,9 @@
  *    #/timeline            Timeline
  *    #/browse              Browse (the list of nights)
  *    #/night/2026-05-01    one night, inside Browse
- *    #/insights            Insights
+ *    #/insights            Insights, Overview tab;  #/insights/<tab>  another tab
+ *                          (overview | music | people | trends | nights; an unknown
+ *                          tab is Overview and the address is rewritten to say so)
  *    #/song/t123           one track's detail page (track ids are positional,
  *                          so a link can go stale after the catalogue is rebuilt;
  *                          an unknown id just lands on Search)
@@ -17,13 +19,18 @@
  *    #/plan  #/resolve    built but off the menu; reachable only by URL
  */
 
+export const INSIGHTS_TABS = ["overview", "music", "people", "trends", "nights"] as const;
+export type InsightsTab = (typeof INSIGHTS_TABS)[number];
+export const isInsightsTab = (s: string | undefined): s is InsightsTab =>
+  !!s && (INSIGHTS_TABS as readonly string[]).includes(s);
+
 export type Route =
   | { name: "home" }
   | { name: "search"; q: string }
   | { name: "timeline" }
   | { name: "browse" }
   | { name: "night"; id: string }
-  | { name: "insights" }
+  | { name: "insights"; tab: InsightsTab }
   | { name: "plan" }
   | { name: "resolve" }
   | { name: "song"; id: string }
@@ -32,7 +39,7 @@ export type Route =
 
 export const HOME: Route = { name: "home" };
 
-const SIMPLE = ["timeline", "browse", "insights", "plan", "resolve"] as const;
+const SIMPLE = ["timeline", "browse", "plan", "resolve"] as const;
 
 export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#/, "");
@@ -45,6 +52,9 @@ export function parseRoute(hash: string): Route {
     if (head === "search") return { name: "search", q: params.get("q") ?? "" };
     if ((SIMPLE as readonly string[]).includes(head) && rest.length === 0) {
       return { name: head as (typeof SIMPLE)[number] };
+    }
+    if (head === "insights") {
+      return { name: "insights", tab: rest.length === 1 && isInsightsTab(rest[0]) ? rest[0] : "overview" };
     }
     if ((head === "night" || head === "song") && rest.length === 1 && rest[0]) {
       const id = decodeURIComponent(rest[0]);
@@ -70,6 +80,7 @@ export function formatRoute(r: Route): string {
     case "home": return "#/";
     case "search": return r.q ? `#/search?${new URLSearchParams({ q: r.q })}` : "#/search";
     case "night": case "song": return `#/${r.name}/${encodeURIComponent(r.id)}`;
+    case "insights": return r.tab === "overview" ? "#/insights" : `#/insights/${r.tab}`;
     case "people": return r.id ? `#/people/${encodeURIComponent(r.id)}` : "#/people";
     case "music": return r.id ? `#/music/artist/${encodeURIComponent(r.id)}` : "#/music";
     default: return `#/${r.name}`;
@@ -81,7 +92,8 @@ export const sameRoute = (a: Route, b: Route) => formatRoute(a) === formatRoute(
 const SITE = "Master Dank Collections";
 const NAMES: Record<Route["name"], string> = {
   home: "", search: "Search", timeline: "Timeline", browse: "Browse", night: "Night",
-  insights: "Insights", plan: "Planner", resolve: "Resolver", song: "Track",
+  insights: "Insights",   // never the tab: the title stays generic
+  plan: "Planner", resolve: "Resolver", song: "Track",
   people: "People", music: "Music",   // never a person's or artist's name: titles stay generic
 };
 
