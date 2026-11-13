@@ -7,6 +7,7 @@ scattered around whatever shape the word turns out to be.
 """
 from __future__ import annotations
 
+import functools
 import math
 import random
 
@@ -377,8 +378,9 @@ def _heartbeat(width: int = 64) -> str:
     return "".join(unit)
 
 
+@functools.lru_cache(maxsize=None)
 def pieces(name: str) -> list:
-    """Rows of (text, kind) segments for the named banner."""
+    """Rows of (text, kind) segments for the named banner (cached: the art never changes)."""
     if name == "dig":
         return [[(line, "word" if any(c in line for c in "█║═") else "star")]
                 for line in BANNER]
@@ -439,8 +441,8 @@ TAB_READY = {
     ],
     "check": [
         "",
-        "  Quick is a glance at the bones. Deep listens to every single second.",
-        "  A track can look fine and still stutter at 2:41. That is what Deep is for.",
+        "  Quick is a glance at the bones. Thorough listens to every single second.",
+        "  A track can look fine and still stutter at 2:41. That is what Thorough is for.",
         "  I only read. I never fix, move, or delete.",
         "",
     ],

@@ -2,6 +2,7 @@
 
 Audio is synthesised or faked in temp dirs; no real music, no network.
 """
+import _isolate  # noqa: F401  (first: keeps tests away from the real %APPDATA%)
 import hashlib
 import json
 import os
@@ -446,6 +447,90 @@ class TestRunCloak(Tmp):
         sel = wf.scan_selection(self.root)
         run = wf.run_cloak(sel.entries, "true", self.out, source_root=self.root, check_first=False, seed=2)
         self.assertEqual(wf.unstrippable_copies(run.result), [])
+
+
+class TestRobustSelection(Tmp):
+    def test_entries_carry_plain_paths_and_real_sizes(self):
+        p = touch(os.path.join(self.root, "a.mp3"), b"x" * 777)
+        sel = wf.scan_selection(self.root)
+        self.assertEqual([e.path for e in sel.entries], [p])
+        self.assertEqual(sel.entries[0].size, 777)
+        self.assertFalse(sel.entries[0].path.startswith("\\\\?\\"))
+
+    def test_unicode_and_long_names_and_zero_byte_files(self):
+        names = ["Björk – Ünïcödé ☃ 日本語 🎵.mp3", "école.flac", "h" * 200 + ".wav", "zero.mp3"]
+        for n in names[:-1]:
+            touch(os.path.join(self.root, n))
+        touch(os.path.join(self.root, "zero.mp3"), b"")
+        sel = wf.scan_selection(self.root)
+        self.assertEqual(sorted(e.name for e in sel.entries), sorted(names))
+        self.assertEqual([e.size for e in sel.entries if e.name == "zero.mp3"], [0])
+
+    def test_missing_folder_gives_an_empty_selection(self):
+        sel = wf.scan_selection(os.path.join(self.root, "nope"))
+        self.assertEqual((sel.entries, sel.non_audio, sel.truncated), ([], 0, False))
+
+    @unittest.skipUnless(os.name == "nt", "junctions are a Windows thing")
+    def test_junction_back_to_the_folder_is_not_followed_forever(self):
+        """Bug: os.walk followed the junction until the path was too long: 10 tracks were listed as
+        ~310 'duplicates' of themselves and the scan took a second instead of milliseconds."""
+        import subprocess
+        touch(os.path.join(self.root, "Peak", "a.mp3"))
+        r = subprocess.run(["cmd", "/c", "mklink", "/J", os.path.join(self.root, "Peak", "back"), self.root],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            self.skipTest("mklink /J unavailable: " + r.stderr.strip())
+        self.addCleanup(lambda: os.rmdir(os.path.join(self.root, "Peak", "back")))
+        sel = wf.scan_selection(self.root)
+        self.assertEqual(len(sel.entries), 1)
+        self.assertEqual(sel.duplicates_removed, 0)
+
+    def test_truncation_stops_the_walk(self):
+        for i in range(5):
+            touch(os.path.join(self.root, "d%d" % i, "t.mp3"))
+        old = wf.MAX_SCAN_FILES
+        wf.MAX_SCAN_FILES = 3
+        try:
+            sel = wf.scan_selection(self.root)
+        finally:
+            wf.MAX_SCAN_FILES = old
+        self.assertTrue(sel.truncated)
+        self.assertLessEqual(len(sel.entries), 3)
+
+
+class TestSmallFiles(Tmp):
+    def test_write_client_id_is_atomic_and_leaves_no_tmp(self):
+        p = os.path.join(self.root, "spotify_client.json")
+        wf.write_client_id(p, "  " + "ab" * 16 + " ")
+        wf.write_client_id(p, "cd" * 16)
+        with open(p, encoding="utf-8") as f:
+            self.assertEqual(json.load(f), {"client_id": "cd" * 16})
+        self.assertEqual(os.listdir(self.root), ["spotify_client.json"])
+
+    def test_save_settings_never_raises_and_cleans_up(self):
+        from unittest import mock
+        with mock.patch.object(wf, "settings_path", return_value=os.path.join(self.root, "ui.json")):
+            wf.save_settings({"w": 1})
+            self.assertEqual(wf.load_settings(), {"w": 1})
+            with mock.patch("os.replace", side_effect=PermissionError("locked")):
+                wf.save_settings({"w": 2})                      # best effort: no exception
+            self.assertEqual(wf.load_settings(), {"w": 1})      # the old file is intact
+            self.assertEqual(os.listdir(self.root), ["ui.json"])
+
+    def test_natural_key_and_durations_come_from_the_shared_helpers(self):
+        import common
+        self.assertIs(wf.natural_key, common.natural_key)
+        self.assertEqual(wf.human_duration(3725), "1h02m")
+        self.assertEqual(wf.human_duration(59.6), "1m00s")
+        self.assertEqual(wf.human_duration(-1), "--")
+
+    def test_read_duration_never_raises(self):
+        junk = touch(os.path.join(self.root, "junk.mp3"), b"nope" * 100)
+        self.assertIsNone(wf.read_duration(junk))
+        self.assertIsNone(wf.read_duration(os.path.join(self.root, "missing.mp3")))
+        wav = os.path.join(self.root, "a.wav")
+        wf.synth_wav(wav, seconds=1.5)
+        self.assertAlmostEqual(wf.read_duration(wav), 1.5, places=1)
 
 
 class TestSelftest(unittest.TestCase):

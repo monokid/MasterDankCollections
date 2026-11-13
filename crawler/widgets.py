@@ -1,8 +1,12 @@
-"""Custom Tk widgets for the crawler: a funky title and a cosmic progress bar.
+"""Custom Tk widgets for the crawler: funky title, cosmic progress bar, header strip, ticker.
 
-Both exist because ttk cannot do what was wanted. A themed Progressbar takes a
-single flat colour, and a Label takes a single flat font colour -- so each of
-these is a small Canvas that paints the gradient itself.
+ttk cannot paint a per-letter gradient or a spectrum bar, so each of these is a small
+Canvas/Text that draws it itself. None of them runs its own timer: `gui.clock.Clock`
+calls their `step()` (one `after` loop for the window), and every item is created once
+and only moved or recoloured afterwards, so a frame allocates nothing.
+
+The palette and fonts live in `gui.theme`; they are re-exported here because
+`workflow.selftest` and older code import them from this module.
 """
 from __future__ import annotations
 
@@ -13,37 +17,18 @@ import time
 import tkinter as tk
 import tkinter.font as tkfont
 
-# The cosmic palette. dankcrawl.py and every widget below take their colours
-# from here, so a tweak is made once.
-BG = "#0b0a1a"
-PANEL = "#151233"
-PANEL_HI = "#221f45"
-FG = "#e8e4ff"
-DIM = "#8f88c4"
-ACCENT = "#b388ff"
-OK = "#7cf5c4"
-BAD = "#ff7b9c"
-WARN = "#ffc46b"
-GREY = "#7a74a8"
-ART = "#5b4f9e"
+from gui.theme import (ACCENT, ART, BAD, BANNER_FONTS, BG, DIM, FG, GREY, MONO_FONTS, OK,  # noqa: F401
+                       PANEL, PANEL_HI, TITLE_FONTS, WARN)
 
-# Tk does no font fallback of its own: naming a missing family silently gives
-# you the default. So the family is resolved against what is actually installed.
-TITLE_FONTS = [
-    "Bauhaus 93", "Showcard Gothic", "Cooper Black", "Broadway",
-    "Gill Sans Ultra Bold", "Arial Black", "Impact", "Trebuchet MS",
-]
-MONO_FONTS = ["Cascadia Mono", "Consolas", "Lucida Console", "Courier New"]
+__all__ = ["ACCENT", "ART", "BAD", "BANNER_FONTS", "BG", "DIM", "FG", "GREY", "MONO_FONTS", "OK",
+           "PANEL", "PANEL_HI", "WARN", "AnimStrip", "CosmicBar", "FunkyTitle", "Ticker",
+           "hsv_hex", "pick_font"]
 
-# The block-letter banner needs rows that stack with no seam between them.
-# Measured on Windows: Cascadia Mono and Consolas leave a gap between the line
-# box and the top of U+2588, which dashes every vertical stroke. Lucida Console
-# fills the cell exactly, so the art is drawn in that whatever the log uses.
-BANNER_FONTS = ["Lucida Console", "Courier New", "Consolas", "Cascadia Mono"]
+_LUT_SIZE = 72
 
 
 def pick_font(candidates: list, fallback: str = "TkDefaultFont") -> str:
-    """First installed family from `candidates`."""
+    """First installed family from `candidates` (Tk would silently substitute a missing one)."""
     try:
         available = set(tkfont.families())
     except tk.TclError:
@@ -59,345 +44,359 @@ def hsv_hex(h: float, s: float, v: float) -> str:
     return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
 
 
+def _wheel(s: float, v: float, n: int = _LUT_SIZE) -> list[str]:
+    """A full hue wheel as a lookup table, so animation never calls colorsys per frame."""
+    return [hsv_hex(i / n, s, v) for i in range(n)]
+
+
+def _at(lut: list[str], hue: float) -> str:
+    return lut[int((hue % 1.0) * len(lut)) % len(lut)]
+
+
 class FunkyTitle(tk.Canvas):
-    """The wordmark, one letter at a time, each its own colour.
+    """The wordmark, one letter at a time, each its own colour, drifting very slowly."""
 
-    The hue drifts slowly so the title reads as alive without ever being the
-    thing that catches your eye while you are trying to read the log.
-    """
-
-    def __init__(self, parent, text: str, bg: str, size: int = 30):
+    def __init__(self, parent: tk.Misc, text: str, bg: str, size: int = 30):
         self.family = pick_font(TITLE_FONTS)
         self.font = tkfont.Font(family=self.family, size=size, weight="bold")
-        height = self.font.metrics("linespace") + 10
-        super().__init__(parent, height=height, bg=bg, highlightthickness=0, bd=0)
+        super().__init__(parent, height=self.font.metrics("linespace") + 10, bg=bg,
+                         highlightthickness=0, bd=0)
         self.text = text
         self.offset = 0.0
-        self._items = []
-        # A Canvas does not size itself to what is drawn on it, so ask the font
-        # how wide the word is -- otherwise the last letters are simply clipped.
-        self.configure(width=self.font.measure(text) + 4)
+        self._items: list[int] = []
+        self._lut = _wheel(0.55, 1.0)
         self._layout()
-        self._animate()
 
-    def _layout(self):
+    def _layout(self) -> None:
         self.delete("all")
+        self.configure(width=self.font.measure(self.text) + 4)
+        x, y = 0, self.winfo_reqheight() / 2
         self._items = []
-        x = 0
-        y = self.winfo_reqheight() / 2
-        for i, ch in enumerate(self.text):
-            item = self.create_text(x, y, text=ch, anchor="w", font=self.font)
-            self._items.append((item, i))
+        for ch in self.text:
+            self._items.append(self.create_text(x, y, text=ch, anchor="w", font=self.font))
             x += self.font.measure(ch)
         self._paint()
 
-    def set_text(self, text: str):
+    def set_text(self, text: str) -> None:
         """Swap the wordmark (one per tab) without rebuilding the widget."""
-        if text == self.text:
-            return
-        self.text = text
-        self.configure(width=self.font.measure(text) + 4)
-        self._layout()
+        if text != self.text:
+            self.text = text
+            self._layout()
 
-    def _paint(self):
+    def _paint(self) -> None:
         n = max(len(self._items), 1)
-        for item, i in self._items:
-            # Spread roughly two thirds of the wheel across the word, then
-            # rotate the whole thing.
-            hue = (i / n) * 0.62 + 0.63 + self.offset
-            self.itemconfigure(item, fill=hsv_hex(hue, 0.55, 1.0))
+        for i, item in enumerate(self._items):
+            self.itemconfigure(item, fill=_at(self._lut, i / n * 0.62 + 0.63 + self.offset))
 
-    def _animate(self):
-        self.offset += 0.0035
+    def step(self) -> None:
+        self.offset += 0.006
         self._paint()
-        self.after(90, self._animate)
 
 
 class CosmicBar(tk.Canvas):
     """Progress bar painted as a horizontal spectrum.
 
-    The gradient belongs to the *bar*, not to the fill: as progress grows you
-    reveal more of a fixed spectrum rather than stretching a two-colour ramp,
-    so the colour at any point means the same thing all the way through.
+    The spectrum belongs to the bar, not to the fill, so the colour at any point means
+    the same thing all the way along. It is rendered once into a PhotoImage (re-rendered
+    only when the width changes); progress just moves a mask rectangle, and the busy
+    comet is a pre-rendered sprite slid along with one `coords` call.
     """
 
-    STEP = 3          # px per gradient band; small enough to look continuous
+    HUE_FROM, HUE_SPAN = 0.88, 0.46       # magenta -> violet -> blue -> cyan -> mint
 
-    def __init__(self, parent, trough: str, height: int = 18):
+    def __init__(self, parent: tk.Misc, trough: str, height: int = 18):
         super().__init__(parent, height=height, bg=trough, highlightthickness=0, bd=0)
         self.trough = trough
-        self.value = 0.0          # 0..1
+        self.value = 0.0
         self.indeterminate = False
         self.phase = 0.0
-        self._job = None
         self._spin_end = 0.0
-        self.bind("<Configure>", lambda _e: self._redraw())
+        self._bw = 0
+        self._spectrum: tk.PhotoImage | None = None
+        self._spin_img: tk.PhotoImage | None = None
+        self._comet_img: tk.PhotoImage | None = None
+        self._resize_job: str | None = None
+        self._spec_item = self.create_image(0, 0, anchor="nw")
+        self._mask = self.create_rectangle(0, 0, 0, 0, fill=trough, outline="")
+        self._cap = self.create_rectangle(0, 0, 0, 0, fill="#ffffff", outline="", state="hidden")
+        self._comet = self.create_image(0, 0, anchor="nw", state="hidden")
+        self.bind("<Configure>", self._on_configure)
 
-    def spin(self, seconds: float = 4.0):
-        """Easter egg: the whole spectrum rotates through the bar for a moment."""
-        if self._spin_end:
-            return
-        self._spin_end = time.monotonic() + seconds
-        self._spin_tick()
+    # -- rendering
+    def _on_configure(self, _e: tk.Event) -> None:
+        if self._resize_job is None:
+            self._resize_job = self.after(120, self._rebuild)
 
-    def _spin_tick(self):
-        if time.monotonic() >= self._spin_end:
-            self._spin_end = 0.0
-            self._redraw()
-            return
-        self._redraw()
-        self.after(33, self._spin_tick)
-
-    def _draw_spin(self, w, h):
-        off = (time.monotonic() * 1.4) % 1.0
-        x = 0
-        while x < w:
-            t = (x / w + off) % 1.0
-            tri = 1.0 - abs(2.0 * t - 1.0)
-            self.create_rectangle(x, 0, x + self.STEP, h, outline="",
-                                  fill=hsv_hex(self.HUE_FROM - tri * self.HUE_SPAN, 0.7, 1.0))
-            x += self.STEP
-
-    def set_value(self, fraction: float):
-        self.value = max(0.0, min(1.0, fraction))
-        if not self.indeterminate:
-            self._redraw()
-
-    def start(self):
-        if self.indeterminate:
-            return
-        self.indeterminate = True
-        self._tick()
-
-    def stop(self):
-        self.indeterminate = False
-        if self._job:
-            self.after_cancel(self._job)
-            self._job = None
-        self._redraw()
-
-    def _tick(self):
-        if not self.indeterminate:
-            return
-        self.phase = (self.phase + 0.016) % 1.0
-        self._redraw()
-        self._job = self.after(28, self._tick)
-
-    # Hue runs *down* the wheel: magenta -> violet -> blue -> cyan -> mint.
-    # Going up instead wraps through red and orange, which reads as a sunset
-    # rather than anything cosmic, and matches nothing else in the project.
-    HUE_FROM, HUE_SPAN = 0.88, 0.46
-
-    def _band_colour(self, t: float) -> str:
-        """t in 0..1 across the full bar."""
+    def _colour(self, t: float) -> str:
         return hsv_hex(self.HUE_FROM - t * self.HUE_SPAN, 0.62, 1.0)
 
-    def _redraw(self):
-        self.delete("all")
-        w = self.winfo_width()
-        h = self.winfo_height()
+    def _row_image(self, colours: list[str], height: int) -> tk.PhotoImage:
+        img = tk.PhotoImage(master=self, width=len(colours), height=1)
+        img.put("{" + " ".join(colours) + "}", to=(0, 0))
+        return img.zoom(1, height)
+
+    def _rebuild(self) -> None:
+        self._resize_job = None
+        w, h = self.winfo_width(), self.winfo_height()
         if w <= 1:
             return
+        self._bw = w
+        self._spectrum = self._row_image([self._colour(x / w) for x in range(w)], h)
+        self.itemconfigure(self._spec_item, image=self._spectrum)
+        self._spin_img = None
+        band = max(int(w * 0.26), 60)
+        glow = []
+        for x in range(band):
+            g = x / band
+            glow.append(hsv_hex(self.HUE_FROM - g * self.HUE_SPAN, 0.62, 0.2 + 0.8 * g))
+        self._comet_img = self._row_image(glow, h)
+        self.itemconfigure(self._comet, image=self._comet_img)
+        self._layout()
 
-        self.create_rectangle(0, 0, w, h, fill=self.trough, outline="")
+    def _layout(self) -> None:
+        w, h = self._bw, self.winfo_height()
+        if w <= 1:
+            return
         if self._spin_end:
-            self._draw_spin(w, h)
+            self.itemconfigure(self._comet, state="hidden")
+            self.itemconfigure(self._cap, state="hidden")
+            self.coords(self._mask, 0, 0, 0, h)
             return
-
         if self.indeterminate:
-            # A comet of light sweeping the trough, with a soft tail.
-            band = max(w * 0.26, 60)
-            head = -band + self.phase * (w + band * 2)
-            x = 0
-            while x < w:
-                d = (head - x) / band
-                if 0.0 <= d <= 1.0:
-                    glow = 1.0 - d
-                    self.create_rectangle(
-                        x, 0, x + self.STEP, h,
-                        fill=hsv_hex(self.HUE_FROM - (x / w) * self.HUE_SPAN,
-                                     0.62, 0.35 + glow * 0.65),
-                        outline="")
-                x += self.STEP
+            self.coords(self._mask, 0, 0, w, h)
+            self.itemconfigure(self._cap, state="hidden")
+            self.itemconfigure(self._comet, state="normal")
+            self._place_comet()
             return
-
+        self.itemconfigure(self._comet, state="hidden")
+        self.coords(self._spec_item, 0, 0)
+        self.itemconfigure(self._spec_item, image=self._spectrum)
         filled = int(w * self.value)
-        x = 0
-        while x < filled:
-            self.create_rectangle(x, 0, min(x + self.STEP, filled), h,
-                                  fill=self._band_colour(x / max(w, 1)), outline="")
-            x += self.STEP
-
-        # A brighter cap on the leading edge, so the bar has a nose.
+        self.coords(self._mask, filled, 0, w, h)
         if 0 < filled < w:
-            self.create_rectangle(max(filled - 3, 0), 0, filled, h,
-                                  fill="#ffffff", outline="")
+            self.coords(self._cap, max(filled - 3, 0), 0, filled, h)
+            self.itemconfigure(self._cap, state="normal")
+        else:
+            self.itemconfigure(self._cap, state="hidden")
+
+    def _place_comet(self) -> None:
+        w = self._bw
+        band = self._comet_img.width() if self._comet_img else 60
+        self.coords(self._comet, -band + self.phase * (w + band), 0)
+
+    def _spin_image(self) -> tk.PhotoImage:
+        """A spectrum twice the bar's width that wraps; sliding it gives the rotating rainbow."""
+        w, h = self._bw, self.winfo_height()
+        cols = []
+        for x in range(2 * w):
+            tri = 1.0 - abs(2.0 * ((x / w) % 1.0) - 1.0)
+            cols.append(hsv_hex(self.HUE_FROM - tri * self.HUE_SPAN, 0.7, 1.0))
+        return self._row_image(cols, h)
+
+    # -- public
+    def set_value(self, fraction: float) -> None:
+        self.value = max(0.0, min(1.0, fraction))
+        if not self.indeterminate and not self._spin_end:
+            self._layout()
+
+    def start(self) -> None:
+        if not self.indeterminate:
+            self.indeterminate = True
+            self._layout()
+
+    def stop(self) -> None:
+        if self.indeterminate:
+            self.indeterminate = False
+            self._layout()
+
+    def spin(self, seconds: float = 4.0) -> None:
+        """Easter egg: the spectrum rotates through the bar for a moment."""
+        if self._spin_end or self._bw <= 1:
+            return
+        if self._spin_img is None:
+            self._spin_img = self._spin_image()
+        self._spin_end = time.monotonic() + seconds
+        self.itemconfigure(self._spec_item, image=self._spin_img)
+        self._layout()
+
+    @property
+    def animating(self) -> bool:
+        return self.indeterminate or bool(self._spin_end)
+
+    def step(self) -> None:
+        """One frame (called by the clock only while `animating`)."""
+        if self._spin_end:
+            if time.monotonic() >= self._spin_end:
+                self._spin_end = 0.0
+                self.itemconfigure(self._spec_item, image=self._spectrum)
+                self._layout()
+                return
+            off = (time.monotonic() * 1.4) % 1.0
+            self.coords(self._spec_item, -off * self._bw, 0)
+        elif self.indeterminate:
+            self.phase = (self.phase + 0.03) % 1.0
+            self._place_comet()
 
 
 class AnimStrip(tk.Canvas):
     """A thin header strip: drifting stars and a slowly pulsing amoeba.
 
-    The blob pulses faster and shifts colour quicker while `busy`. Cheap by
-    design: ~14 fps, about fifty canvas items, and it draws nothing at all while
-    the window is minimised or unfocused (the owner flips `active`).
+    All canvas items are created once (on the first real size) and then only moved or
+    recoloured from lookup tables, so a frame does no allocation. The blob pulses faster
+    while `busy`. The clock simply stops calling `step()` when the window is not in use.
     """
 
-    FRAME_MS = 72
+    NSTARS, NPTS, SWARM = 28, 20, 9
 
-    def __init__(self, parent, bg: str = BG, height: int = 40):
+    def __init__(self, parent: tk.Misc, bg: str = BG, height: int = 40):
         super().__init__(parent, height=height, bg=bg, highlightthickness=0, bd=0)
         self.busy = False
-        self.active = True
         rng = random.Random(5)
-        # x is a 0..1 fraction of the width so a resize needs no bookkeeping.
         self.stars = [[rng.random(), rng.random(), 0.05 + rng.random() * 0.25,
-                       rng.choice((1, 1, 2)), rng.random() * 6.28]
-                      for _ in range(46)]
-        self.t = 0.0          # animation clock, runs faster when busy
+                       rng.choice((1, 1, 2)), rng.random() * 6.28] for _ in range(self.NSTARS)]
+        self.t = 0.0
         self.drift = 0.0
         self._last = time.monotonic()
         self._swarm_start = 0.0
         self._swarm_len = 0.0
-        self._tick()
+        self._star_items: list[int] = []
+        self._blobs: list[tuple[int, int]] = []     # (polygon, nucleus); [0] is the main one
+        self._star_lut = [hsv_hex(0.68 + 0.1 * i / 11, 0.35, 0.35 + 0.5 * i / 11) for i in range(12)]
+        self._fill = _wheel(0.55, 0.5)
+        self._edge = _wheel(0.45, 1.0)
+        self._core = _wheel(0.7, 0.95)
+        self._frame = 0
 
-    def set_busy(self, busy: bool):
+    def set_busy(self, busy: bool) -> None:
         self.busy = busy
 
-    def set_active(self, active: bool):
-        self.active = active
-        self._last = time.monotonic()      # no giant time-step on wake
-
-    def swarm(self, seconds: float = 5.0):
+    def swarm(self, seconds: float = 5.0) -> None:
         """Easter egg: the amoeba splits into a swarm, then pulls itself together."""
         self._swarm_start = time.monotonic()
         self._swarm_len = seconds
 
-    def _blob(self, cx, cy, radius, hue, wob_t):
+    def _build(self) -> None:
+        self._star_items = [self.create_rectangle(0, 0, 1, 1, outline="") for _ in self.stars]
+        for _ in range(1 + self.SWARM):
+            poly = self.create_polygon([0, 0] * self.NPTS, smooth=True, width=1)
+            core = self.create_oval(0, 0, 1, 1, outline="")
+            self._blobs.append((poly, core))
+        for poly, core in self._blobs[1:]:
+            self.itemconfigure(poly, state="hidden")
+            self.itemconfigure(core, state="hidden")
+
+    def _blob(self, idx: int, cx: float, cy: float, radius: float, hue: float, wob: float) -> None:
+        poly, core = self._blobs[idx]
         pts = []
-        n = 20
-        for i in range(n):
-            a = i / n * 2 * math.pi
-            r = radius * (1 + 0.13 * math.sin(3 * a + wob_t * 1.3)
-                          + 0.08 * math.sin(5 * a - wob_t * 0.9))
-            pts += [cx + math.cos(a) * r * 1.35, cy + math.sin(a) * r * 0.9]
-        self.create_polygon(pts, smooth=True, fill=hsv_hex(hue, 0.55, 0.5),
-                            outline=hsv_hex(hue, 0.45, 1.0), width=1)
-        # the nucleus: a brighter spot that sits a little off-centre and wanders
-        nx = cx + math.cos(wob_t * 0.7) * radius * 0.25
-        ny = cy + math.sin(wob_t * 0.9) * radius * 0.18
+        for i in range(self.NPTS):
+            a = i / self.NPTS * 2 * math.pi
+            r = radius * (1 + 0.13 * math.sin(3 * a + wob * 1.3) + 0.08 * math.sin(5 * a - wob * 0.9))
+            pts.append(cx + math.cos(a) * r * 1.35)
+            pts.append(cy + math.sin(a) * r * 0.9)
+        self.coords(poly, *pts)
+        self.itemconfigure(poly, fill=_at(self._fill, hue), outline=_at(self._edge, hue))
+        nx = cx + math.cos(wob * 0.7) * radius * 0.25
+        ny = cy + math.sin(wob * 0.9) * radius * 0.18
         nr = radius * 0.32
-        self.create_oval(nx - nr, ny - nr, nx + nr, ny + nr, outline="",
-                         fill=hsv_hex(hue + 0.05, 0.7, 0.95))
+        self.coords(core, nx - nr, ny - nr, nx + nr, ny + nr)
+        self.itemconfigure(core, fill=_at(self._core, hue + 0.05))
 
-    def _tick(self):
-        delay = self.FRAME_MS
-        if self.active and self.winfo_ismapped():
-            self._draw()
-        else:
-            delay = 500
-        self.after(delay, self._tick)
+    def _show_swarm(self, on: bool) -> None:
+        state = "normal" if on else "hidden"
+        for poly, core in self._blobs[1:]:
+            self.itemconfigure(poly, state=state)
+            self.itemconfigure(core, state=state)
 
-    def _draw(self):
-        now = time.monotonic()
-        dt = min(now - self._last, 0.25)
-        self._last = now
-        rate = 3.2 if self.busy else 1.0
-        self.t += dt * rate
-        self.drift += dt * rate
+    def step(self) -> None:
         w, h = self.winfo_width(), self.winfo_height()
         if w <= 1:
             return
-        self.delete("all")
-        for st in self.stars:
-            st[0] = (st[0] - st[2] * dt * rate * 0.08) % 1.0
-            tw = 0.5 + 0.5 * math.sin(self.t * 2 + st[4])
-            col = hsv_hex(0.68 + 0.1 * tw, 0.35, 0.35 + 0.5 * tw)
+        if not self._star_items:
+            self._build()
+        now = time.monotonic()
+        dt = min(now - self._last, 0.25)
+        self._last = now
+        rate = 3.0 if self.busy else 1.0
+        self.t += dt * rate
+        self.drift += dt * rate
+        self._frame += 1
+        recolour = self._frame % 3 == 0
+        for item, st in zip(self._star_items, self.stars):
+            st[0] = (st[0] - st[2] * dt * rate * 0.06) % 1.0
             x, y = st[0] * w, 3 + st[1] * (h - 6)
-            self.create_rectangle(x, y, x + st[3], y + st[3], fill=col, outline="")
-        # the amoeba ambles left and right across the strip
+            self.coords(item, x, y, x + st[3], y + st[3])
+            if recolour:
+                tw = 0.5 + 0.5 * math.sin(self.t * 1.6 + st[4])
+                self.itemconfigure(item, fill=self._star_lut[int(tw * 11)])
         cy = h / 2
-        span = max(w - 160, 10)
-        cx = 80 + (0.5 + 0.5 * math.sin(self.drift * 0.18)) * span
-        radius = 11 + 2.2 * math.sin(self.t * 1.6)
-        hue = 0.74 + 0.1 * math.sin(self.t * (0.5 if not self.busy else 1.6))
+        cx = 80 + (0.5 + 0.5 * math.sin(self.drift * 0.14)) * max(w - 160, 10)
+        radius = 11 + 2.0 * math.sin(self.t * 1.4)
+        hue = 0.74 + 0.1 * math.sin(self.t * (0.4 if not self.busy else 1.4))
         sw = 0.0
         if self._swarm_len:
             el = now - self._swarm_start
             if el >= self._swarm_len:
                 self._swarm_len = 0.0
             else:
-                # split out over 0.8 s, hold, and fold back in over the last 0.8 s
                 sw = max(0.0, min(1.0, el / 0.8, (self._swarm_len - el) / 0.8))
+        self._show_swarm(sw > 0)
         if sw > 0:
-            for k in range(9):
+            for k in range(self.SWARM):
                 a = self.t * (0.8 + k * 0.07) + k * 0.7
-                dx = math.cos(a) * (30 + 22 * (k % 3)) * sw * 1.4
-                dy = math.sin(a * 1.3) * (h * 0.32) * sw
-                self._blob(cx + dx, cy + dy, 5 + 1.2 * math.sin(self.t * 2 + k),
-                           hue + k * 0.06, self.t + k)
-            self._blob(cx, cy, radius * (1 - 0.5 * sw), hue, self.t)
+                self._blob(1 + k, cx + math.cos(a) * (30 + 22 * (k % 3)) * sw * 1.4,
+                           cy + math.sin(a * 1.3) * h * 0.32 * sw,
+                           5 + 1.2 * math.sin(self.t * 2 + k), hue + k * 0.06, self.t + k)
+            self._blob(0, cx, cy, radius * (1 - 0.5 * sw), hue, self.t)
         else:
-            self._blob(cx, cy, radius, hue, self.t)
+            self._blob(0, cx, cy, radius, hue, self.t)
 
 
 class Ticker(tk.Text):
     """A one-line status strip whose letters cycle through the spectrum.
 
-    It is a Text widget (so each character can carry a tag) but never grows: the
-    line is rewritten in place and only the *tag colours* animate, ~8 times a
-    second. Flavour text rotates every few seconds.
+    The line is rewritten only when the flavour text changes (every few seconds); the
+    animation just recolours 16 tags from a lookup table.
     """
 
     NTAGS = 16
     SPARKS = ["✦", "✧", "⋆", "✶", "✷"]
-    FPS_MS = 125
-    SWAP_EVERY = 24      # frames between flavour lines (~3 s)
+    SWAP_EVERY = 20        # steps between flavour lines
 
-    def __init__(self, parent, bg: str, font):
-        super().__init__(parent, height=1, bg=bg, fg=DIM, bd=0, highlightthickness=0,
-                         font=font, wrap="none", state="disabled", cursor="arrow",
-                         takefocus=0, insertwidth=0)
+    def __init__(self, parent: tk.Misc, bg: str, font: tuple):
+        super().__init__(parent, height=1, bg=bg, fg=DIM, bd=0, highlightthickness=0, font=font,
+                         wrap="none", state="disabled", cursor="arrow", takefocus=0, insertwidth=0)
         for k in range(self.NTAGS):
             self.tag_configure("rb%d" % k)
         self.running = False
         self.frame = 0
-        self.flavours = []
+        self.flavours: list[str] = []
         self._idx = 0
-        self._job = None
+        self._lut = _wheel(0.55, 1.0)
 
-    def _write(self, text: str):
+    def _write(self, text: str) -> None:
         self.configure(state="normal")
         self.delete("1.0", "end")
         for i, ch in enumerate(text):
             self.insert("end", ch, "rb%d" % (i % self.NTAGS))
         self.configure(state="disabled")
 
-    def start(self, flavours: list):
+    def start(self, flavours: list) -> None:
         self.flavours = list(flavours) or ["working"]
         self._idx = random.randrange(len(self.flavours))
         self.frame = 0
         self.running = True
         self._compose()
-        if self._job is None:
-            self._tick()
 
-    def stop(self):
+    def stop(self) -> None:
         self.running = False
-        if self._job is not None:
-            try:
-                self.after_cancel(self._job)
-            except tk.TclError:
-                pass
-            self._job = None
         self._write("")
 
-    def _compose(self):
+    def _compose(self) -> None:
         spark = " ".join(self.SPARKS)
         self._write("%s  %s...  %s" % (spark, self.flavours[self._idx % len(self.flavours)], spark))
 
-    def _tick(self):
+    def step(self) -> None:
         if not self.running:
-            self._job = None
             return
         self.frame += 1
         if self.frame % self.SWAP_EVERY == 0:
@@ -405,6 +404,4 @@ class Ticker(tk.Text):
             self._compose()
         base = self.frame * 0.045
         for k in range(self.NTAGS):
-            self.tag_configure("rb%d" % k,
-                               foreground=hsv_hex(base + k / self.NTAGS, 0.55, 1.0))
-        self._job = self.after(self.FPS_MS, self._tick)
+            self.tag_configure("rb%d" % k, foreground=_at(self._lut, base + k / self.NTAGS))

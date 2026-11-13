@@ -7,12 +7,14 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import struct
 import sys
 import tempfile
 import threading
 import unittest
 import wave
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -25,9 +27,32 @@ from mutagen.id3 import APIC, COMM, ID3, PRIV, TCOP, TENC, TALB, TIT2, TPE1, TXX
 PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 32
 
 
-def sha(path):
+def rb(path):
     with open(path, "rb") as f:
-        return hashlib.sha1(f.read()).hexdigest()
+        return f.read()
+
+
+def wb(path, data):
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+def rtext(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def read_json(path):
+    return json.loads(rtext(path))
+
+
+def read_csv(path):
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        return list(csv.DictReader(f))
+
+
+def sha(path):
+    return hashlib.sha1(rb(path)).hexdigest()
 
 
 # ------------------------------------------------------------ synthesisers
@@ -219,7 +244,7 @@ class NoTagSurvives(Base):
 
     def test_mp3_all_id3_ape_frames_gone(self):
         new, _ = self.check("mp3", "a.mp3")
-        raw = open(new, "rb").read()
+        raw = rb(new)
         for needle in (b"ID3", b"TAG", b"APETAGEX", b"Secret", b"secret", b"PNG"):
             self.assertNotIn(needle, raw)
 
@@ -227,23 +252,23 @@ class NoTagSurvives(Base):
         new, _ = self.check("flac", "a.flac")
         from mutagen.flac import FLAC
         self.assertEqual(FLAC(new).pictures, [])
-        self.assertNotIn(b"Secret", open(new, "rb").read())
+        self.assertNotIn(b"Secret", rb(new))
 
     def test_wav_info_and_id3_chunks_gone(self):
         new, _ = self.check("wav", "a.wav")
         self.assertEqual([c for c, _, _ in cloak._chunk_walk(new, False)], [b"fmt ", b"data"])
-        self.assertNotIn(b"Secret", open(new, "rb").read())
+        self.assertNotIn(b"Secret", rb(new))
 
     def test_m4a_atoms_gone(self):
         new, _ = self.check("m4a", "a.m4a")
-        raw = open(new, "rb").read()
+        raw = rb(new)
         for needle in (b"covr", b"Secret", b"secret", b"\xa9nam"):
             self.assertNotIn(needle, raw)
 
     def test_opus_comments_gone(self):
         new, _ = self.check("opus", "a.opus")
-        self.assertNotIn(b"Secret", open(new, "rb").read())
-        self.assertNotIn(b"secretenc", open(new, "rb").read())
+        self.assertNotIn(b"Secret", rb(new))
+        self.assertNotIn(b"secretenc", rb(new))
 
 
 class AudioPayloadIdentical(Base):
@@ -270,10 +295,10 @@ class AudioPayloadIdentical(Base):
                     hi = lo + sz
                 else:
                     continue
-                data = bytearray(open(f, "rb").read())
+                data = bytearray(rb(f))
                 data[(lo + hi) // 2] ^= 0xFF
                 bad = os.path.join(self.root, "bad" + ext)
-                open(bad, "wb").write(data)
+                wb(bad, data)
                 self.assertNotEqual(h, cloak.audio_payload_hash(bad, ext), kind)
 
 
@@ -317,7 +342,7 @@ class KindaMode(Base):
         self.assertEqual([x.dst_rel for x in p], ["anon_X_A_01.mp3", "anon_X_B_01.mp3", "anon_X_A_02.mp3", "anon_X_B_02.mp3"])
         many = [os.path.join(self.src, f"m{i}.mp3") for i in range(120)]
         for m in many:
-            open(m, "wb").write(b"")
+            wb(m, b"")
         p = cloak.build_plan(many, "kinda", person="X")
         self.assertEqual(p[0].dst_rel, "anon_X_001.mp3")
         self.assertEqual(p[-1].dst_rel, "anon_X_120.mp3")
@@ -421,18 +446,18 @@ class Records(Base):
         rec = res.record_dir
         for n in ("record.csv", "record.m3u8", "record.json", "DO-NOT-SHARE.txt"):
             self.assertTrue(os.path.isfile(os.path.join(rec, n)), n)
-        rows = list(csv.DictReader(open(os.path.join(rec, "record.csv"), encoding="utf-8-sig")))
+        rows = list(read_csv(os.path.join(rec, "record.csv")))
         self.assertEqual(list(rows[0].keys()), ["number", "new_name", "artist", "title", "album", "duration_sec",
                                                 "person", "phase", "fake_artist", "fake_title", "source_path"])
         self.assertEqual([(r["artist"], r["title"], r["source_path"]) for r in rows],
                          [("Art A", "Song A", files[0]), ("Art B", "Song B", files[1])])
         for r in rows:
             self.assertTrue(os.path.isfile(os.path.join(res.out_dir, "anonymised", r["new_name"])))
-        m3u = open(os.path.join(rec, "record.m3u8"), encoding="utf-8").read().splitlines()
+        m3u = rtext(os.path.join(rec, "record.m3u8")).splitlines()
         self.assertEqual(m3u[0], "#EXTM3U")
         self.assertTrue(m3u[1].endswith(",Art A - Song A"))
         self.assertEqual(m3u[2], "anon_Ian_P1_01.mp3")
-        js = json.load(open(os.path.join(rec, "record.json"), encoding="utf-8"))
+        js = read_json(os.path.join(rec, "record.json"))
         self.assertEqual(js["seed"], 77)
         self.assertEqual([i["new_name"] for i in js["items"]], ["anon_Ian_P1_01.mp3", "anon_Ian_P1_02.flac"])
         self.assertEqual(os.listdir(os.path.join(self.out, "anonymised")), ["anon_Ian_P1_01.mp3", "anon_Ian_P1_02.flac"])
@@ -475,17 +500,17 @@ class Refusals(Base):
 class Unstrippable(Base):
     def test_unknown_format_reported_loudly_not_silently(self):
         f = os.path.join(self.src, "x.wma")
-        open(f, "wb").write(b"not really wma but tagged Secret")
+        wb(f, b"not really wma but tagged Secret")
         plan, res = self.run_plan([f], "true", seed=1)
         self.assertEqual(res.copied, 1)
         self.assertEqual(res.verified, 0)
         self.assertEqual(res.unstrippable, [f])
-        js = json.load(open(os.path.join(res.record_dir, "record.json"), encoding="utf-8"))
+        js = read_json(os.path.join(res.record_dir, "record.json"))
         self.assertIn("UNSTRIPPABLE", js["items"][0]["detail"])
 
     def test_corrupt_supported_file_fails_and_is_not_shipped(self):
         bad = os.path.join(self.src, "bad.flac")
-        open(bad, "wb").write(b"garbage")
+        wb(bad, b"garbage")
         good = self.mk("g.mp3")
         plan, res = self.run_plan([bad, good], "true", seed=1)
         self.assertEqual([s for s, _ in res.failed], [bad])
@@ -514,10 +539,260 @@ class StopEvent(Base):
         self.assertEqual(res.copied, 2)
         self.assertEqual(len(calls), 2)
         on_disk = sorted(os.listdir(os.path.join(self.out, "anonymised")))
-        rows = list(csv.DictReader(open(os.path.join(res.record_dir, "record.csv"), encoding="utf-8-sig")))
+        rows = list(read_csv(os.path.join(res.record_dir, "record.csv")))
         self.assertEqual(on_disk, sorted(r["new_name"] for r in rows))
         self.assertEqual(len(rows), 2)
         self.assertFalse([n for n in on_disk if n.startswith("~cloak")])
+
+
+class Mp3TagLayouts(Base):
+    """Where the tags sit around the audio frames must not matter."""
+    AUDIO = bytes([0xFF, 0xFB, 0x90, 0x64]) + bytes(((i * 7) % 251) for i in range(413))
+    AUDIO = AUDIO * 30
+
+    @staticmethod
+    def id3v2(text="Secret"):
+        body = b"TIT2" + struct.pack(">I", len(text) + 1) + b"\0\0" + b"\x03" + text.encode()
+        n = len(body)
+        return b"ID3\x03\x00\x00" + bytes([(n >> 21) & 127, (n >> 14) & 127, (n >> 7) & 127, n & 127]) + body
+
+    @staticmethod
+    def id3v1():
+        return b"TAG" + b"Secret".ljust(125, b"\0")
+
+    @staticmethod
+    def ape():
+        item = struct.pack("<II", 6, 0) + b"Artist\0" + b"Secret"
+        return item + b"APETAGEX" + struct.pack("<IIII", 2000, len(item) + 32, 1, 0) + bytes(8)
+
+    def layouts(self):
+        a, v2, v1, ape = self.AUDIO, self.id3v2, self.id3v1, self.ape
+        return {
+            "v2 audio ape v1": v2() + a + ape() + v1(),
+            "v2 audio v1 ape": v2() + a + v1() + ape(),
+            "two stacked v2": v2("one") + v2("two") + a,
+            "audio ape": a + ape(),
+            "audio only": a,
+        }
+
+    def test_only_the_audio_frames_survive_whatever_the_layout(self):
+        """Bug: with the ID3v1 tag BEFORE the APEv2 tag the old payload range kept the 128 v1 bytes,
+        so the stripped copy 'differed' and a perfectly good file was reported as failed."""
+        for name, data in self.layouts().items():
+            with self.subTest(name):
+                f = os.path.join(self.src, name.replace(" ", "_") + ".mp3")
+                wb(f, data)
+                plan = cloak.build_plan([f], "true", seed=1)
+                res = cloak.execute(plan, os.path.join(self.out, name.replace(" ", "_")))
+                self.assertEqual(res.failed, [])
+                out = os.path.join(res.out_dir, "anonymised", os.listdir(os.path.join(res.out_dir, "anonymised"))[0])
+                self.assertEqual(rb(out), self.AUDIO)
+
+    def test_strip_file_in_place_gives_the_same_bytes(self):
+        for name, data in self.layouts().items():
+            with self.subTest(name):
+                f = os.path.join(self.root, "inplace.mp3")
+                wb(f, data)
+                cloak.strip_file(f, ".mp3")
+                self.assertEqual(rb(f), self.AUDIO)
+                self.assertEqual([n for n in os.listdir(self.root) if n.endswith(".rw")], [])
+
+    def test_fake_tag_has_no_padding_and_only_the_fakes(self):
+        f = os.path.join(self.root, "fake.mp3")
+        wb(f, self.layouts()["v2 audio ape v1"])
+        cloak.strip_file(f, ".mp3", "Fake Artist", "Fake Title")
+        raw = rb(f)
+        self.assertTrue(raw.endswith(self.AUDIO))
+        mf = MutagenFile(f)
+        self.assertEqual(sorted(str(k) for k in mf.tags.keys()), ["TIT2", "TPE1"])
+        self.assertEqual(str(mf.tags["TPE1"]), "Fake Artist")
+        tag_len = 10 + ((raw[6] << 21) | (raw[7] << 14) | (raw[8] << 7) | raw[9])
+        self.assertEqual(tag_len, len(raw) - len(self.AUDIO))
+
+    def test_payload_range_matches_the_layout(self):
+        for name, data in self.layouts().items():
+            with self.subTest(name):
+                f = os.path.join(self.root, "r.mp3")
+                wb(f, data)
+                (start, end), = cloak._mp3_range(f)
+                self.assertEqual(data[start:end], self.AUDIO)
+
+
+class SinglePassCopy(Base):
+    def test_copy_hash_equals_payload_hash_and_bytes_are_identical(self):
+        for kind in ("mp3", "flac", "wav", "m4a"):
+            with self.subTest(kind):
+                src = self.mk("a." + kind, kind)
+                dst = os.path.join(self.root, "copy." + kind)
+                fin, size = cloak._open_raw(src)
+                with fin, open(dst, "w+b") as fout:
+                    h = cloak._copy_stream(fin, size, fout, "." + kind)
+                self.assertEqual(rb(dst), rb(src))
+                self.assertEqual(h, cloak.audio_payload_hash(src, "." + kind))
+                self.assertIsNotNone(h)
+
+    def test_ogg_has_no_byte_range_hash(self):
+        src = self.mk("a.opus", "opus")
+        fin, size = cloak._open_raw(src)
+        with fin, open(os.path.join(self.root, "c.opus"), "w+b") as fout:
+            self.assertIsNone(cloak._copy_stream(fin, size, fout, ".opus"))
+
+    def test_wav_stream_keeps_only_format_and_audio_and_hashes_the_audio(self):
+        src = self.mk("a.wav", "wav")
+        dst = os.path.join(self.root, "s.wav")
+        fin, size = cloak._open_raw(src)
+        with fin, open(dst, "w+b") as fout:
+            h = cloak._stream_stripped_chunks(fin, size, fout, False)
+        self.assertEqual([c for c, _, _ in cloak._chunk_walk(dst, False)], [b"fmt ", b"data"])
+        self.assertEqual(h, cloak.audio_payload_hash(src, ".wav"))
+        self.assertEqual(h, cloak.audio_payload_hash(dst, ".wav"))
+
+    def test_verify_trusts_a_given_source_hash_and_does_not_read_the_source(self):
+        src = self.mk("a.mp3")
+        plan, res = self.run_plan([src], "true", seed=1)
+        out = os.path.join(res.out_dir, "anonymised", plan[0].dst_rel)
+        good = cloak.audio_payload_hash(src, ".mp3")
+        with mock.patch.object(cloak, "audio_payload_hash", side_effect=AssertionError("source re-read")):
+            ok, detail, how = cloak.verify_stripped(src, out, ".mp3", src_hash=good)
+            self.assertEqual((ok, detail, how), (True, "", "payload"))
+            ok, detail, _ = cloak.verify_stripped(src, out, ".mp3", src_hash="0" * 40)
+            self.assertFalse(ok)
+            self.assertIn("audio payload differs", detail)
+
+    def test_each_output_is_opened_once_for_copy_strip_and_verify(self):
+        """Performance: on Windows the first re-open of a file just written waits for the virus
+        scanner (milliseconds per file), so the pipeline must verify through the handle it wrote with."""
+        files = [self.mk("a.mp3"), self.mk("b.flac", "flac"), self.mk("c.wav", "wav"),
+                 self.mk("d.m4a", "m4a")]
+        opened = []
+        real_open = open
+
+        def spy(path, *a, **k):
+            if isinstance(path, str) and os.path.basename(path).startswith("~cloak_"):
+                opened.append(os.path.basename(path))
+            return real_open(path, *a, **k)
+
+        for mode in ("true", "switcheroo"):
+            plan = cloak.build_plan(files, mode, seed=2)
+            opened.clear()
+            with mock.patch("builtins.open", spy):
+                res = cloak.execute(plan, os.path.join(self.root, "o-" + mode))
+            self.assertEqual((res.copied, res.failed), (4, []), mode)
+            self.assertEqual(len(opened), 4, (mode, opened))
+
+    def test_failed_files_leave_no_temp_files_behind(self):
+        bad = []
+        for name, data in (("zero.mp3", b""), ("junk.flac", b"garbage"), ("nodata.wav", b"RIFF\x04\0\0\0WAVE"),
+                           ("junk.m4a", b"\0" * 64), ("junk.opus", b"OggS" + b"\0" * 40)):
+            p = os.path.join(self.src, name)
+            wb(p, data)
+            bad.append(p)
+        good = self.mk("g.mp3")
+        plan, res = self.run_plan(bad + [good], "true", seed=1)
+        self.assertEqual((res.copied, len(res.failed)), (1, len(bad)))
+        left = os.listdir(os.path.join(self.out, "anonymised"))
+        self.assertEqual(len(left), 1, left)
+        self.assertFalse([n for n in left if n.startswith("~") or n.endswith(".rw")])
+
+
+class RunSurvives(Base):
+    def test_a_raising_progress_callback_does_not_abort_the_run(self):
+        files = [self.mk("a.mp3"), self.mk("b.mp3")]
+
+        def boom(*a):
+            raise RuntimeError("GUI went away")
+        plan = cloak.build_plan(files, "true", seed=1)
+        res = cloak.execute(plan, self.out, progress=boom)
+        self.assertEqual((res.copied, res.failed), (2, []))
+
+    @unittest.skipUnless(os.name == "nt", "exclusive file locks are a Windows thing")
+    def test_a_locked_source_fails_only_that_file(self):
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        k32.CreateFileW.restype = ctypes.c_void_p
+        locked, free = self.mk("locked.mp3"), self.mk("free.mp3")
+        h = k32.CreateFileW(cloak._lp(locked), 0x80000000, 0, None, 3, 0x80, None)   # GENERIC_READ, share none
+        self.assertNotEqual(h, ctypes.c_void_p(-1).value)
+        try:
+            plan, res = self.run_plan([locked, free], "true", seed=1)
+        finally:
+            k32.CloseHandle(ctypes.c_void_p(h))
+        self.assertEqual(res.copied, 1)
+        self.assertEqual([s for s, _ in res.failed], [locked])
+        self.assertEqual(len(os.listdir(os.path.join(self.out, "anonymised"))), 1)
+
+    def test_a_source_that_vanishes_mid_run_fails_only_that_file(self):
+        files = [self.mk("t%d.mp3" % i) for i in range(5)]
+        plan = cloak.build_plan(files, "true", seed=1)
+
+        def prog(done, total, name):
+            if done == 1:
+                os.remove(files[3])
+        res = cloak.execute(plan, self.out, progress=prog)
+        self.assertEqual((res.copied, [s for s, _ in res.failed]), (4, [files[3]]))
+
+    def test_same_file_in_another_spelling_is_planned_once(self):
+        f = self.mk("Song.mp3")
+        plan = cloak.build_plan([f, f.upper(), os.path.join(self.src, ".", "Song.mp3")], "true", seed=1)
+        self.assertEqual(len(plan), 1)
+
+
+class PlanScaling(unittest.TestCase):
+    def test_phase_lookup_is_linear_in_the_number_of_files(self):
+        """Bug: every file missing from `phases` (e.g. those sitting directly in the chosen folder)
+        re-normalised EVERY key of `phases` (realpath each): n x m filesystem calls."""
+        n = 300
+        top = os.path.join(tempfile.gettempdir(), "dc-phase-scaling")
+        files = [os.path.join(top, "root", "r%d.mp3" % i) for i in range(n)]
+        phases = {os.path.join(top, "sub", "s%d.mp3" % i): "Phase" for i in range(n)}
+        calls = []
+        real = cloak._norm
+
+        def counting(p):
+            calls.append(p)
+            return real(p)
+        with mock.patch.object(cloak, "_norm", counting):
+            plan = cloak.build_plan(files, "kinda", person="P", seed=1, phases=phases)
+        self.assertEqual(len(plan), n)
+        self.assertLess(len(calls), 5 * n, len(calls))
+
+    def test_phase_found_through_another_spelling_of_the_same_path(self):
+        d = tempfile.mkdtemp(prefix="dc-phase-")
+        self.addCleanup(shutil.rmtree, d, True)
+        f = os.path.join(d, "a.mp3")
+        plan = cloak.build_plan([f], "kinda", person="P", seed=1, phases={os.path.join(d, ".", "A.MP3"): "Peak"})
+        self.assertEqual(plan[0].phase, "Peak" if os.name == "nt" else None)
+
+    def test_many_identical_fake_titles_resolve_in_linear_time(self):
+        """Bug: the 'same fake name twice -> add a roman numeral' loop restarted at I for every file,
+        so n files titled 'Untitled 1..n' cost n^2/2 name attempts."""
+        n = 400
+        files = [os.path.join(tempfile.gettempdir(), "dc-nothere", "Untitled %d.mp3" % i) for i in range(n)]
+        calls = []
+        real = cloak.sanitize_part
+
+        def counting(*a, **k):
+            calls.append(1)
+            return real(*a, **k)
+        with mock.patch.object(cloak, "sanitize_part", counting):
+            plan = cloak.build_plan(files, "switcheroo", seed=3)
+        names = [p.dst_rel.lower() for p in plan]
+        self.assertEqual(len(set(names)), n)
+        self.assertLess(len(calls), 6 * n, len(calls))
+        first = [p.fake_title for p in plan[:4]]
+        base = first[0]
+        self.assertEqual(first, [base, base + " II", base + " III", base + " IV"])
+
+    def test_sanitize_matches_the_character_by_character_rule(self):
+        def reference(s):
+            return "".join(c for c in s if c not in '<>:"/\\|?*' and ord(c) >= 32)
+        sample = "".join(chr(i) for i in range(0, 600)) + "日本語 🎵 é"
+        got = cloak.sanitize_part(sample)
+        want = " ".join(reference(sample).split()).rstrip(". ").strip()
+        self.assertEqual(got, want)
+        self.assertEqual(cloak.sanitize_part("con"), "_con")
+        self.assertEqual(cloak.sanitize_part("a" * 100, 10), "a" * 10)
+        self.assertEqual(cloak.sanitize_part(None), "")
 
 
 if __name__ == "__main__":

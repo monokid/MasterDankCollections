@@ -7,41 +7,30 @@ writes only into the output folder.
 """
 from __future__ import annotations
 
-import csv
 import json
-import math
 import os
-import random
 import re
 import struct
-import tempfile
 import time
-import wave
 from dataclasses import dataclass, field
 from datetime import date
 
 import cloak
 import integrity
-import scanner
+from common import (AUDIO_EXTS as _AUDIO_EXTS, atomic_write, is_within, long_path, natural_key, norm_path,
+                    plain_path, split_hms, walk_entries)
 
-AUDIO_EXTS = set(scanner.AUDIO_EXTS)
+AUDIO_EXTS = set(_AUDIO_EXTS)
 MAX_SCAN_FILES = 20000          # a playlist folder, not a disk: stop before it takes minutes
 
 # ------------------------------------------------------------------ small helpers
-
-
-def natural_key(s: str) -> list:
-    """Sort key for 'Track 2' < 'Track 10'. Always [str, int, str, int, ...]."""
-    return [int(t) if i % 2 else t.casefold() for i, t in enumerate(re.split(r"(\d+)", s))]
 
 
 def human_duration(sec) -> str:
     """'3h12m', '12m05s', '45s'; '--' when unknown."""
     if sec is None or sec < 0:
         return "--"
-    sec = int(round(sec))
-    h, rem = divmod(sec, 3600)
-    m, s = divmod(rem, 60)
+    h, m, s = split_hms(sec)
     if h:
         return "%dh%02dm" % (h, m)
     if m:
@@ -55,8 +44,7 @@ def valid_client_id(s) -> bool:
 
 
 def write_client_id(path: str, client_id: str) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"client_id": client_id.strip()}, f)
+    atomic_write(path, lambda f: json.dump({"client_id": client_id.strip()}, f), encoding="utf-8")
 
 
 def default_playlist_name(person, folder, today=None) -> str:
@@ -93,12 +81,12 @@ def load_settings() -> dict:
 
 
 def save_settings(d: dict) -> None:
+    """Best effort: remembering the window size is never worth an error."""
     try:
         p = settings_path()
         os.makedirs(os.path.dirname(p), exist_ok=True)
-        with open(p, "w", encoding="utf-8") as f:
-            json.dump(d, f)
-    except OSError:
+        atomic_write(p, lambda f: json.dump(d, f), encoding="utf-8")
+    except (OSError, TypeError):
         pass
 
 
@@ -135,7 +123,7 @@ def dedupe_paths(paths) -> tuple:
     """Drop repeats of the same real file (different spelling, case, links). -> (kept, removed)."""
     seen, kept, removed = set(), [], 0
     for p in paths:
-        k = cloak._norm(p)
+        k = norm_path(p)
         if k in seen:
             removed += 1
             continue
@@ -153,15 +141,20 @@ def scan_selection(folder: str) -> Selection:
     """
     folder = os.path.abspath(folder)
     sel = Selection(folder)
-    found = []   # (subfolder, rel, full)
-    for dirpath, dirnames, filenames in os.walk(folder):
-        dirnames[:] = sorted((d for d in dirnames if not d.startswith(".")), key=natural_key)
-        rel_dir = os.path.relpath(dirpath, folder)
-        parts = [] if rel_dir == "." else rel_dir.split(os.sep)
-        for fn in filenames:
-            if os.path.splitext(fn)[1].lower() in AUDIO_EXTS:
-                rel = "/".join(parts + [fn])
-                found.append((parts[0] if parts else "", rel, os.path.join(dirpath, fn)))
+    found = []   # (subfolder, rel, full, size)
+    below = {long_path(folder): []}   # dirpath -> folder names below the chosen one
+    for dirpath, dirs, files in walk_entries(long_path(folder)):
+        parts = below.pop(dirpath)
+        dirs[:] = sorted((d for d in dirs if not d.name.startswith(".")), key=lambda d: natural_key(d.name))
+        for d in dirs:
+            below[d.path] = parts + [d.name]
+        for e in files:
+            if os.path.splitext(e.name)[1].lower() in AUDIO_EXTS:
+                try:
+                    size = e.stat().st_size
+                except OSError:
+                    size = 0
+                found.append((parts[0] if parts else "", "/".join(parts + [e.name]), plain_path(e.path), size))
             else:
                 sel.non_audio += 1
         if len(found) >= MAX_SCAN_FILES:
@@ -172,15 +165,11 @@ def scan_selection(folder: str) -> Selection:
     sel.duplicates_removed = removed
     keep = set(kept)
     subs = []
-    for sub, rel, full in found:
+    for sub, rel, full, size in found:
         if full not in keep:
             continue
         keep.discard(full)       # the first spelling wins
         ext = os.path.splitext(full)[1].lower()
-        try:
-            size = os.path.getsize(full)
-        except OSError:
-            size = 0
         sel.entries.append(FileEntry(full, os.path.basename(full), sub, True, None,
                                      ext.lstrip(".").upper(), size))
         if sub and sub not in subs:
@@ -202,7 +191,7 @@ def read_duration(path: str):
     """Seconds, or None. Never raises."""
     try:
         from mutagen import File
-        mf = File(cloak._lp(path))
+        mf = File(long_path(path))
         ln = getattr(getattr(mf, "info", None), "length", None)
         return float(ln) if ln else None
     except Exception:
@@ -269,9 +258,9 @@ def output_problem(out_dir: str, source_roots) -> str | None:
     """Plain-language reason the output folder is unacceptable, or None."""
     if not (out_dir or "").strip():
         return "Choose an output folder first."
-    nout = cloak._norm(out_dir)
+    nout = norm_path(out_dir)
     for r in source_roots:
-        if cloak._is_within(nout, cloak._norm(r)):
+        if is_within(nout, norm_path(r)):
             return ("The output folder is inside the playlist folder. Pick somewhere else so the "
                     "originals and the copies never mix.")
     if os.path.isfile(out_dir):
@@ -382,12 +371,13 @@ def unstrippable_copies(result) -> list:
 
 def delete_copies(paths, anon_dir: str) -> int:
     """Delete files, but only ones that really live inside `anon_dir`. -> number deleted."""
-    root = cloak._norm(anon_dir)
+    root = norm_path(anon_dir)
     n = 0
     for p in paths:
-        if cloak._is_within(cloak._norm(p), root) and cloak._norm(p) != root:
+        key = norm_path(p)
+        if is_within(key, root) and key != root:
             try:
-                os.remove(cloak._lp(p))
+                os.remove(long_path(p))
                 n += 1
             except OSError:
                 pass
@@ -443,6 +433,7 @@ def queries_from_entries(entries) -> tuple:
 
 def load_record_csv(path: str) -> tuple:
     """Queries from a record.csv written by the cloak step. -> (queries, rows_skipped)."""
+    import csv
     import spotify_link
     with open(path, newline="", encoding="utf-8-sig") as f:
         rd = csv.DictReader(f)
@@ -482,6 +473,7 @@ def _pack(fields):
 
 def synth_mp3_bytes(seconds=2.0, seed=1) -> bytes:
     """MPEG-1 Layer III mono 44.1 kHz of quiet noise: tiny, and the decoder accepts it."""
+    import random
     rng = random.Random(seed)
     nframes = int(seconds * 44100 / 1152)
     frames, acc = [], 0
@@ -505,6 +497,8 @@ def synth_mp3_bytes(seconds=2.0, seed=1) -> bytes:
 
 
 def synth_wav(path: str, seconds=1.5, rate=8000) -> None:
+    import math
+    import wave
     n = int(seconds * rate)
     with wave.open(path, "wb") as w:
         w.setnchannels(1)
@@ -550,6 +544,7 @@ def selftest(say=print) -> bool:
             n += len(banner.pieces(name))
         return "%d banner rows" % n
 
+    import tempfile
     tmp = tempfile.mkdtemp(prefix="dankcrawl-selftest-")
     src = os.path.join(tmp, "src")
     os.makedirs(src)
@@ -627,9 +622,6 @@ def selftest(say=print) -> bool:
     step("integrity deep (bundled decoder)", deep)
     step("spotify matcher + playlist (fake transport)", spotify)
     say("ALL PASSED" if ok_all[0] else "SOME STEPS FAILED")
-    try:
-        import shutil
-        shutil.rmtree(tmp, ignore_errors=True)
-    except Exception:
-        pass
+    import shutil
+    shutil.rmtree(tmp, ignore_errors=True)
     return ok_all[0]

@@ -8,22 +8,29 @@ Public API: Verdict, have_ffmpeg, deep_supported, check_file, check_many, summar
 """
 from __future__ import annotations
 
-import csv
 import mmap
 import os
-import shutil
 import struct
-import subprocess
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
-from typing import Optional
+import zlib
+from dataclasses import dataclass, field
 
-try:  # optional: without it the deep pass falls back to ffmpeg only
-    import miniaudio  # type: ignore
-except Exception:  # pragma: no cover
-    miniaudio = None
+from common import is_regular_file, long_path, no_window_kwargs, split_hms
+
+_ma = []   # [module or None] once tried; miniaudio drags in numpy (~0.25 s), so it loads on first deep use
+
+
+def _miniaudio():
+    """The miniaudio module, or None if it is not installed (the deep pass then falls back to ffmpeg)."""
+    if not _ma:
+        try:
+            import miniaudio  # type: ignore
+            _ma.append(miniaudio)
+        except Exception:   # not installed, or its cffi backend is missing from a frozen build
+            _ma.append(None)
+    return _ma[0]
+
 
 FFMPEG_TIMEOUT = 180          # seconds per file for the ffmpeg deep pass
 MIN_AUDIO_BYTES = 1024        # anything smaller cannot hold real audio
@@ -42,9 +49,9 @@ class Verdict:
     ext: str
     level: str = "ok"                  # 'ok' | 'warn' | 'fail' | 'unsupported'
     reasons: list = field(default_factory=list)
-    header_seconds: Optional[float] = None   # duration the file itself claims (None = it doesn't say)
-    decoded_seconds: Optional[float] = None  # engine 'structure': audio found by walking; else: decoded
-    error_at_seconds: Optional[float] = None
+    header_seconds: float | None = None   # duration the file itself claims (None = it doesn't say)
+    decoded_seconds: float | None = None  # engine 'structure': audio found by walking; else: decoded
+    error_at_seconds: float | None = None
     size_bytes: int = 0
     engine: str = "structure"          # 'structure' | 'miniaudio' | 'ffmpeg'
 
@@ -52,9 +59,7 @@ class Verdict:
 # ---------------------------------------------------------------- formatting helpers
 
 def _t(sec: float) -> str:
-    sec = int(round(max(sec, 0)))
-    h, rem = divmod(sec, 3600)
-    m, s = divmod(rem, 60)
+    h, m, s = split_hms(sec)
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
@@ -109,12 +114,16 @@ _BR_V2 = {1: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256]
 _SR = {3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000]}
 
 
-def _mp3_header(buf, pos, end):
-    """Parse an MPEG audio frame header at pos. Returns (length, samples, sr, version, layer, bitrate_kbps,
-    mono, crc) or None if not a valid header, or the string 'free' for free-format."""
-    if pos + 4 > end:
-        return None
-    b0, b1, b2, b3 = buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]
+_FREE = (0, 0, 0, 0, 0, 0, False, False, None)   # free-format marker; same shape as a header, never equals `first`
+_MISS = object()
+_HDR_CACHE = {}   # 4 header bytes -> parse result; a CBR file has only a handful of distinct headers
+
+
+def _parse_header4(h: bytes):
+    """Parse the 4 bytes of an MPEG audio frame header. Returns (length, samples, sr, version, layer,
+    bitrate_kbps, mono, crc, (sr, version, layer)) or None if not a valid header, or _FREE for
+    free-format."""
+    b0, b1, b2, b3 = h
     if b0 != 0xFF or (b1 & 0xE0) != 0xE0:
         return None
     ver = (b1 >> 3) & 3          # 3=MPEG1, 2=MPEG2, 0=MPEG2.5, 1=reserved
@@ -129,7 +138,7 @@ def _mp3_header(buf, pos, end):
     mono = (b3 >> 6) == 3
     crc = (b1 & 1) == 0
     if bi == 0:
-        return "free"
+        return _FREE
     br = (_BR_V1 if ver == 3 else _BR_V2)[layer][bi]
     pad = (b2 >> 1) & 1
     if layer == 1:
@@ -141,7 +150,20 @@ def _mp3_header(buf, pos, end):
     else:
         length = 72 * br * 1000 // sr + pad
         spf = 576
-    return length, spf, sr, ver, layer, br, mono, crc
+    return length, spf, sr, ver, layer, br, mono, crc, (sr, ver, layer)
+
+
+def _mp3_header(buf, pos, end):
+    """The parsed frame header at pos (see _parse_header4), or None if there are not 4 bytes before `end`."""
+    if pos + 4 > end:
+        return None
+    k = bytes(buf[pos:pos + 4])
+    h = _HDR_CACHE.get(k, _MISS)
+    if h is _MISS:
+        if len(_HDR_CACHE) > 8192:   # garbage data can produce endless distinct headers
+            _HDR_CACHE.clear()
+        h = _HDR_CACHE[k] = _parse_header4(k)
+    return h
 
 
 def _syncsafe(b):
@@ -207,23 +229,22 @@ def _quick_mp3(path, size, q: _Q):
         skipped_total = 0
         leading_junk = 0
         free = False
-        last_len = None
 
         def params_ok(h):
-            return h not in (None, "free") and (first is None or (h[2], h[3], h[4]) == first)
+            return h is not None and h is not _FREE and (first is None or h[8] == first)
 
         def next_ok(p, h):
             n = _mp3_header(buf, p + h[0], end)
-            return p + h[0] == end or (params_ok(n) and n is not None and (n[2], n[3], n[4]) == (h[2], h[3], h[4]))
+            return p + h[0] == end or (params_ok(n) and n is not None and n[8] == h[8])
 
         while pos < end:
             h = _mp3_header(buf, pos, end)
-            if h == "free":
+            if h is _FREE:
                 free = True
                 break
             if params_ok(h) and pos + h[0] <= end:
                 if first is None:
-                    first = (h[2], h[3], h[4])
+                    first = h[8]
                     first_spf = h[1]
                     # Xing / Info / VBRI header frame?
                     if h[4] == 3:
@@ -243,11 +264,22 @@ def _quick_mp3(path, size, q: _Q):
                             continue
                 frames += 1
                 samples += h[1]
-                last_len = h[0]
                 pos += h[0]
+                # Hot path: a run of frames with the same parameters. Headers repeat byte for byte
+                # (CBR) or nearly, so a dict hit replaces re-parsing the header every frame.
+                cget, p, run = _HDR_CACHE.get, pos, 0
+                while p < end:
+                    nh = cget(buf[p:p + 4])
+                    if nh is None or nh[8] != first or p + nh[0] > end:
+                        break
+                    p += nh[0]
+                    run += 1
+                frames += run
+                samples += run * first_spf
+                pos = p
                 continue
             # --- lost sync (or truncated last frame)
-            if h is not None and h != "free" and params_ok(h) and pos + h[0] > end:
+            if params_ok(h) and pos + h[0] > end:
                 q.warn(f"the last audio frame is cut off ({_b(end - pos)} of {_b(h[0])} present)")
                 pos = end
                 break
@@ -262,7 +294,7 @@ def _quick_mp3(path, size, q: _Q):
                 if cand < 0:
                     break
                 ch = _mp3_header(buf, cand, end)
-                if params_ok(ch) and ch is not None and ch != "free" and \
+                if params_ok(ch) and \
                         (cand + ch[0] <= end and next_ok(cand, ch) or
                          (cand + ch[0] > end and end - cand >= 4 and first is not None)):
                     found = cand
@@ -322,12 +354,23 @@ def _quick_mp3(path, size, q: _Q):
 
 # ---------------------------------------------------------------- FLAC
 
+def _crc_table8() -> list:
+    out = []
+    for i in range(256):
+        crc = i
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x07) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+        out.append(crc)
+    return out
+
+
+_CRC8 = _crc_table8()
+
+
 def _crc8(data: bytes) -> int:
     crc = 0
     for b in data:
-        crc ^= b
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x07) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+        crc = _CRC8[crc ^ b]
     return crc
 
 
@@ -724,19 +767,15 @@ def _quick_ape(path, size, q: _Q):
 
 # ---------------------------------------------------------------- OGG / OPUS
 
-_OGG_TABLE = []
-for _i in range(256):
-    _r = _i << 24
-    for _ in range(8):
-        _r = ((_r << 1) ^ 0x04C11DB7) & 0xFFFFFFFF if _r & 0x80000000 else (_r << 1) & 0xFFFFFFFF
-    _OGG_TABLE.append(_r)
+# Ogg's CRC-32 (poly 0x04C11DB7, MSB first, no inversion) is zlib's reflected CRC-32 run over
+# bit-reversed bytes with the register preset to zero, bit-reversed on the way out: C speed instead
+# of a Python loop per byte.
+_BITREV8 = bytes(int(f"{i:08b}"[::-1], 2) for i in range(256))
 
 
 def _ogg_crc(data: bytes) -> int:
-    crc = 0
-    for b in data:
-        crc = ((crc << 8) & 0xFFFFFFFF) ^ _OGG_TABLE[((crc >> 24) ^ b) & 0xFF]
-    return crc
+    r = zlib.crc32(bytes(data).translate(_BITREV8), 0xFFFFFFFF) ^ 0xFFFFFFFF
+    return int(f"{r:032b}"[::-1], 2)
 
 
 def _ogg_page(buf, pos, size):
@@ -820,6 +859,7 @@ def have_ffmpeg():
     """Path of ffmpeg (on PATH or next to the exe / bundled), else None."""
     if _ffmpeg_cache[0]:
         return _ffmpeg_cache[1]
+    import shutil
     found = shutil.which("ffmpeg")
     if not found:
         dirs = [os.path.dirname(os.path.abspath(sys.executable)), getattr(sys, "_MEIPASS", None),
@@ -839,7 +879,7 @@ def deep_supported(ext: str) -> bool:
     ext = ext.lower()
     if not ext.startswith("."):
         ext = "." + ext
-    if miniaudio is not None and ext in MINIAUDIO_EXTS:
+    if ext in MINIAUDIO_EXTS and _miniaudio() is not None:
         return True
     return ext in FFMPEG_EXTS and have_ffmpeg() is not None
 
@@ -853,6 +893,7 @@ class _Deep:
 
 
 def _deep_miniaudio(path, header_seconds, walked, d: _Deep):
+    miniaudio = _miniaudio()
     d.engine = "miniaudio"
     info = miniaudio.get_file_info(path)
     sr, ch = info.sample_rate, max(info.nchannels, 1)
@@ -909,11 +950,9 @@ def _deep_ffmpeg(path, header_seconds, d: _Deep):
     d.engine = "ffmpeg"
     cmd = [have_ffmpeg(), "-v", "error", "-xerror", "-nostdin", "-nostats", "-progress", "pipe:1",
            "-i", path, "-f", "null", "-"]
-    kw = {}
-    if os.name == "nt":
-        kw["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+    import subprocess
     try:
-        r = subprocess.run(cmd, capture_output=True, timeout=FFMPEG_TIMEOUT, **kw)
+        r = subprocess.run(cmd, capture_output=True, timeout=FFMPEG_TIMEOUT, **no_window_kwargs())
     except subprocess.TimeoutExpired:
         d.reasons.append(("warn", f"ffmpeg did not finish within {FFMPEG_TIMEOUT} s: file not fully checked"))
         return
@@ -945,25 +984,21 @@ def check_file(path: str, deep: bool = False) -> Verdict:
     ext = os.path.splitext(path)[1].lower()
     v = Verdict(path=path, ext=ext)
     try:
-        if not os.path.exists(path):
+        exists, is_file, v.size_bytes = is_regular_file(path)
+        if not exists:
             v.level, v.reasons = "fail", ["file not found"]
             return v
-        if not os.path.isfile(path):
+        if not is_file:
             v.level, v.reasons = "fail", ["this is not a file"]
             return v
-        v.size_bytes = os.path.getsize(path)
-        if ext not in QUICK_EXTS:
-            # deep via ffmpeg can still examine odd formats
-            if deep and deep_supported(ext):
-                pass
-            else:
-                v.level, v.reasons = "unsupported", [f"{ext or 'this file type'} is not checked"]
-                return v
+        if ext not in QUICK_EXTS and not (deep and deep_supported(ext)):   # deep via ffmpeg can still examine odd formats
+            v.level, v.reasons = "unsupported", [f"{ext or 'this file type'} is not checked"]
+            return v
         q = _Q()
         if v.size_bytes == 0:
             q.fail("the file is empty (0 bytes)", fatal=True)
         elif ext in _QUICK:
-            _QUICK[ext](path, v.size_bytes, q)
+            _QUICK[ext](long_path(path), v.size_bytes, q)
         v.header_seconds = q.header_seconds
         v.decoded_seconds = q.walked_seconds
         items = list(q.items)
@@ -971,7 +1006,7 @@ def check_file(path: str, deep: bool = False) -> Verdict:
             if deep_supported(ext):
                 d = _Deep()
                 try:
-                    if miniaudio is not None and ext in MINIAUDIO_EXTS:
+                    if ext in MINIAUDIO_EXTS and _miniaudio() is not None:
                         try:
                             _deep_miniaudio(path, q.header_seconds, q.walked_seconds, d)
                         except Exception as e:
@@ -1005,7 +1040,12 @@ def check_file(path: str, deep: bool = False) -> Verdict:
 
 def check_many(paths, deep: bool = False, progress=None, stop=None, workers: int = 1):
     """Check many files; results keep input order. Files not reached because `stop` was set are omitted.
-    progress(done, total, current_name) may be called from worker threads."""
+
+    progress(done, total, current_name) is called from the worker threads when workers > 1, but
+    never concurrently and with `done` strictly increasing (calls are serialised under a lock), so a
+    callback need not be thread-safe against itself; it must still hand work to the GUI thread.
+    An exception raised by `progress` is swallowed.
+    """
     paths = list(paths)
     total = len(paths)
     results = [None] * total
@@ -1018,12 +1058,11 @@ def check_many(paths, deep: bool = False, progress=None, stop=None, workers: int
         results[i] = check_file(paths[i], deep)
         with lock:
             done[0] += 1
-            n = done[0]
-        if progress:
-            try:
-                progress(n, total, os.path.basename(str(paths[i])))
-            except Exception:
-                pass
+            if progress:
+                try:
+                    progress(done[0], total, os.path.basename(str(paths[i])))
+                except Exception:   # a broken progress display must not abort the check
+                    pass
 
     if workers <= 1:
         for i in range(total):
@@ -1031,9 +1070,9 @@ def check_many(paths, deep: bool = False, progress=None, stop=None, workers: int
                 break
             run(i)
     else:
+        from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = [ex.submit(run, i) for i in range(total)]
-            for f in futs:
+            for f in [ex.submit(run, i) for i in range(total)]:
                 f.result()
     return [r for r in results if r is not None]
 
@@ -1056,6 +1095,7 @@ def summarise(verdicts) -> dict:
 
 def write_report(verdicts, out_path):
     """Write CSV to out_path and a human summary beside it (.txt). Returns the .txt path."""
+    import csv
     out_path = str(out_path)
     order = {"fail": 0, "warn": 1, "unsupported": 2, "ok": 3}
     rows = sorted(verdicts, key=lambda v: (order.get(v.level, 9), v.path))

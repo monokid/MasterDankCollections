@@ -6,9 +6,11 @@ import os
 import random
 import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import wave
 from unittest import mock
@@ -423,6 +425,181 @@ class Many(Base):
         self.assertTrue(os.path.getsize(out) > 0 and os.path.getsize(txt) > 0)
         with open(txt, encoding="utf-8") as fh:
             self.assertIn("bad.mp3", fh.read())
+
+
+def _ref_crc8(data):
+    crc = 0
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x07) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+    return crc
+
+
+def _ref_ogg_crc(data):
+    crc = 0
+    for b in data:
+        crc ^= b << 24
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x04C11DB7) & 0xFFFFFFFF if crc & 0x80000000 else (crc << 1) & 0xFFFFFFFF
+    return crc
+
+
+def _ref_mp3_header(buf, pos, end):
+    """The original, uncached frame-header parser (what _mp3_header must keep returning)."""
+    if pos + 4 > end:
+        return None
+    b0, b1, b2, b3 = buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]
+    if b0 != 0xFF or (b1 & 0xE0) != 0xE0:
+        return None
+    ver, layer_bits = (b1 >> 3) & 3, (b1 >> 1) & 3
+    if ver == 1 or layer_bits == 0:
+        return None
+    layer = 4 - layer_bits
+    bi, si = b2 >> 4, (b2 >> 2) & 3
+    if bi == 15 or si == 3:
+        return None
+    sr = integrity._SR[ver][si]
+    if bi == 0:
+        return "free"
+    br = (integrity._BR_V1 if ver == 3 else integrity._BR_V2)[layer][bi]
+    pad = (b2 >> 1) & 1
+    if layer == 1:
+        length, spf = (12 * br * 1000 // sr + pad) * 4, 384
+    elif layer == 2 or ver == 3:
+        length, spf = 144 * br * 1000 // sr + pad, 1152
+    else:
+        length, spf = 72 * br * 1000 // sr + pad, 576
+    return length, spf, sr, ver, layer, br, (b3 >> 6) == 3, (b1 & 1) == 0
+
+
+class FastPaths(Base):
+    def test_table_crcs_equal_the_bitwise_definitions(self):
+        rng = random.Random(4)
+        for n in (0, 1, 2, 5, 17, 300, 40000):
+            data = bytes(rng.getrandbits(8) for _ in range(n))
+            self.assertEqual(integrity._crc8(data), _ref_crc8(data), n)
+            self.assertEqual(integrity._ogg_crc(data), _ref_ogg_crc(data), n)
+            self.assertEqual(integrity._ogg_crc(bytearray(data)), _ref_ogg_crc(data), n)
+
+    def test_header_parse_with_cache_equals_the_original_parser(self):
+        rng = random.Random(11)
+        for i in range(30000):
+            h = bytearray(rng.getrandbits(8) for _ in range(4))
+            if i % 3:
+                h[0], h[1] = 0xFF, 0xE0 | (h[1] & 0x1F)   # force the sync bits so most parse
+            buf = bytes(h) + b"\0" * 8
+            want = _ref_mp3_header(buf, 0, len(buf))
+            for _ in range(2):   # second time comes from the cache
+                got = integrity._mp3_header(buf, 0, len(buf))
+                if isinstance(want, tuple):
+                    self.assertEqual(got[:8], want, bytes(h))
+                elif want == "free":
+                    self.assertIs(got, integrity._FREE)
+                else:
+                    self.assertIsNone(got)
+        self.assertIsNone(integrity._mp3_header(b"\xff\xfb\x90", 0, 3))
+
+    def test_walk_counts_every_frame_with_padding_and_cached_headers(self):
+        for seconds in (1, 5):
+            data = make_mp3(seconds, noisy=False, xing=False)
+            nframes = int(seconds * 44100 / 1152)
+            v = integrity.check_file(self.put("w.mp3", data))
+            self.assertEqual(v.level, "ok", v.reasons)
+            self.assertAlmostEqual(v.decoded_seconds, nframes * 1152 / 44100, places=6)
+
+    def test_walk_still_sees_a_break_after_a_long_run_of_frames(self):
+        data = make_mp3(10, noisy=False, xing=False)
+        pos = 0
+        while pos < len(data) // 2:
+            pos += integrity._mp3_header(data, pos, len(data))[0]
+        junk = bytes([1, 2, 3, 4, 5]) * 300
+        v = integrity.check_file(self.put("brk.mp3", data[:pos] + junk + data[pos:]))
+        self.assertIn(v.level, ("warn", "fail"))
+        self.assertReason(v, "lost sync at 0:0")
+        self.assertAlmostEqual(v.decoded_seconds, 10, delta=0.2)
+
+    def test_one_stat_call_per_file_in_the_quick_pass(self):
+        p = self.put("s.mp3", make_mp3(1, noisy=False))
+        with mock.patch("os.stat", wraps=os.stat) as st:
+            v = integrity.check_file(p)
+        self.assertEqual(v.level, "ok", v.reasons)
+        self.assertEqual(st.call_count, 1)
+
+    def test_unicode_and_very_long_paths_are_checked(self):
+        d = os.path.join(self.dir, "Björk 日本語 🎵", *["d" * 60] * 5)
+        lp = integrity.long_path(d)
+        os.makedirs(lp)
+        p = os.path.join(d, "é" * 40 + ".wav")
+        self.assertGreater(len(p), 260)
+        make_wav(integrity.long_path(p), 1.0)
+        v = integrity.check_file(p)
+        self.assertEqual(v.level, "ok", v.reasons)
+        self.assertGreater(v.size_bytes, 0)
+
+    def test_directory_and_missing_file_are_reported_not_raised(self):
+        self.assertEqual(integrity.check_file(self.dir).reasons, ["this is not a file"])
+        self.assertEqual(integrity.check_file(os.path.join(self.dir, "x.mp3")).reasons, ["file not found"])
+
+    def test_locked_file_is_a_failed_verdict_not_a_crash(self):
+        if os.name != "nt":
+            self.skipTest("exclusive file locks are a Windows thing")
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        k32.CreateFileW.restype = ctypes.c_void_p
+        p = self.put("l.mp3", make_mp3(1))
+        h = k32.CreateFileW(integrity.long_path(p), 0x80000000, 0, None, 3, 0x80, None)
+        try:
+            v = integrity.check_file(p)
+        finally:
+            k32.CloseHandle(ctypes.c_void_p(h))
+        self.assertEqual(v.level, "fail")
+        self.assertReason(v, "could not be checked")
+
+
+class ProgressAndProcesses(Base):
+    def test_progress_is_serialised_and_strictly_increasing_with_workers(self):
+        """Bug: `done` was counted under the lock but the callback ran outside it, so worker threads
+        could deliver 7 before 6, or run two callbacks at once."""
+        paths = [os.path.join(self.dir, f"{i}.mp3") for i in range(300)]
+        seen, inside, overlap = [], [0], []
+
+        def prog(done, total, name):
+            inside[0] += 1
+            if inside[0] > 1:
+                overlap.append(done)
+            seen.append(done)
+            if done % 7 == 0:
+                time.sleep(0.001)
+            inside[0] -= 1
+
+        with mock.patch.object(integrity, "check_file", lambda p, deep=False: integrity.Verdict(p, ".mp3")):
+            res = integrity.check_many(paths, progress=prog, workers=8)
+        self.assertEqual(len(res), 300)
+        self.assertEqual(seen, list(range(1, 301)))
+        self.assertEqual(overlap, [])
+
+    def test_a_raising_progress_callback_does_not_abort_the_check(self):
+        paths = [self.put(f"{i}.mp3", make_mp3(1, seed=i)) for i in range(3)]
+
+        def boom(*a):
+            raise RuntimeError("GUI went away")
+        for workers in (1, 3):
+            self.assertEqual(len(integrity.check_many(paths, progress=boom, workers=workers)), 3)
+
+    def test_ffmpeg_runs_without_a_console_window(self):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(kw)
+            return subprocess.CompletedProcess(cmd, 0, b"out_time_us=1000000\n", b"")
+
+        d = integrity._Deep()
+        with mock.patch.object(integrity, "have_ffmpeg", return_value="ffmpeg-here"), \
+                mock.patch("subprocess.run", fake_run):
+            integrity._deep_ffmpeg(self.put("a.opus", b"x"), None, d)
+        self.assertEqual(calls[0].get("creationflags", 0), 0x08000000 if os.name == "nt" else 0)
+        self.assertEqual(d.reasons, [])
 
 
 if __name__ == "__main__":

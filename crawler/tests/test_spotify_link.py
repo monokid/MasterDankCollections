@@ -1,3 +1,4 @@
+import _isolate  # noqa: F401  (first: keeps tests away from the real %APPDATA%)
 import json
 import os
 import sys
@@ -156,10 +157,31 @@ class TestTokens(Base):
         self.assertEqual(t['expires_at'], 1000 + 3600)
         self.assertFalse(os.path.exists(self.tokfile + '.tmp'))
 
-    def test_client_id_change_drops_tokens(self):
+    def test_client_id_change_ignores_tokens_but_never_deletes_them(self):
+        # Another Spotify app's sign-in is unusable here, yet it is not ours to delete: a
+        # test run or a wrong client id once wiped a real sign-in this way.
         self.seed(cid='old')
         link = self.link(lambda *a: resp(), cid='new')
         self.assertFalse(link.is_signed_in())
+        self.assertTrue(os.path.exists(self.tokfile))
+
+    def test_tests_never_point_at_the_real_sign_in_folder(self):
+        home = os.environ['DANKCRAWL_TEST_HOME']
+        path = os.path.abspath(sl.token_path())
+        self.assertTrue(path.startswith(os.path.abspath(home) + os.sep), path)
+
+    def test_a_failed_refresh_for_network_reasons_keeps_the_sign_in(self):
+        self.seed(expires=900)   # expired, so a refresh is attempted
+        link = self.link(lambda *a: resp(503, {'error': 'unavailable'}))
+        with self.assertRaises(sl.SpotifyError):
+            link.find([Query('a', 'b')])
+        self.assertTrue(os.path.exists(self.tokfile), 'a 5xx must not log the user out')
+
+    def test_a_rejected_refresh_token_forgets_the_sign_in(self):
+        self.seed(expires=900)
+        link = self.link(lambda *a: resp(400, {'error': 'invalid_grant'}))
+        with self.assertRaises(sl.SpotifyError):
+            link.find([Query('a', 'b')])
         self.assertFalse(os.path.exists(self.tokfile))
 
     def test_sign_out_deletes(self):
@@ -400,6 +422,65 @@ class TestPlaylist(Base):
         s = sl.setup_instructions('C:\\x\\spotify_client.json')
         for needle in ('http://127.0.0.1:8765/callback', 'Web API', 'Premium', 'User Management', 'C:\\x\\spotify_client.json'):
             self.assertIn(needle, s)
+
+
+def _ref_norm(s):
+    """The original, character-by-character normaliser that norm() must keep matching."""
+    import unicodedata
+    out = []
+    for ch in unicodedata.normalize('NFC', s or ''):
+        d = unicodedata.normalize('NFKD', ch)
+        out.append(d[0] if d and d[0].isascii() else ch)
+    s = ''.join(out).casefold().replace('&', ' and ')
+    s = ''.join(c if c.isalnum() else ' ' for c in s)
+    return ' '.join(s.split())
+
+
+class TestSpeedups(Base):
+    def test_norm_equals_the_original_for_every_kind_of_character(self):
+        for cp in range(0, 0x110000, 5):
+            if 0xD800 <= cp < 0xE000:
+                continue
+            s = 'a' + chr(cp) + 'B&' + chr(cp) + '_x'
+            self.assertEqual(sl.norm(s), _ref_norm(s), hex(cp))
+        for s in ('', None, 'Beyoncé & Jay-Z', 'Sigur Rós', '  A  b ', 'ﬁne ™ ² ½', 'a_b', 'ǅ', 'İstanbul'):
+            self.assertEqual(sl.norm(s), _ref_norm(s), s)
+
+    def test_matching_helpers_are_cached(self):
+        sl.norm.cache_clear()
+        for _ in range(5):
+            sl.norm('Some Title (feat. X)')
+            sl.clean_title('Some Title (Remastered 2011)')
+        self.assertGreaterEqual(sl.norm.cache_info().hits, 4)
+
+    def test_scores_are_unchanged_by_the_caching(self):
+        q = Query('Beyoncé & Jay-Z', 'Crazy in Love (feat. Jay-Z) [Remastered]', 'Dangerously', 236)
+        first = sl.score_candidate(q, 'Crazy In Love - Remastered 2014', ['Beyoncé', 'JAY-Z'], 'Dangerously in Love', 236)
+        again = sl.score_candidate(q, 'Crazy In Love - Remastered 2014', ['Beyoncé', 'JAY-Z'], 'Dangerously in Love', 236)
+        self.assertEqual(first, again)
+        self.assertGreater(first[0], 0.9)
+        self.assertTrue(first[1])
+
+    def test_failed_token_save_leaves_no_tmp_and_the_session_still_works(self):
+        link = self.link(lambda *a: resp(200, {}))
+        from unittest import mock
+        os.makedirs(os.path.dirname(self.tokfile))
+        with mock.patch('os.replace', side_effect=PermissionError('locked')):
+            link._save({'client_id': 'cid1', 'access_token': 'a', 'refresh_token': 'r', 'expires_at': 9999})
+        self.assertEqual(os.listdir(os.path.dirname(self.tokfile)), [])
+        self.assertEqual(link._tokens['access_token'], 'a')
+
+    def test_default_browser_opener_is_not_imported_until_sign_in(self):
+        link = sl.SpotifyLink(client_id='cid1', transport=Fake(lambda *a: resp()), token_file=self.tokfile)
+        self.assertIsNone(link._open)
+
+    def test_token_file_is_owner_only_json(self):
+        link = self.link(lambda *a: resp(200, {}))
+        link._save({'client_id': 'cid1', 'access_token': 'a', 'refresh_token': 'r', 'expires_at': 9999})
+        with open(self.tokfile) as f:
+            self.assertEqual(json.load(f)['refresh_token'], 'r')
+        if os.name != 'nt':
+            self.assertEqual(os.stat(self.tokfile).st_mode & 0o777, 0o600)
 
 
 if __name__ == '__main__':

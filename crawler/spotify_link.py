@@ -17,23 +17,21 @@ codes and Spotify's own error message fields.
 from __future__ import annotations
 
 import base64
-import csv
-import difflib
-import hashlib
-import http.server
 import json
 import os
 import re
 import secrets
 import sys
-import threading
 import time
 import unicodedata
-import urllib.error
 import urllib.parse
-import urllib.request
-import webbrowser
 from dataclasses import dataclass, field
+from functools import lru_cache
+
+from common import atomic_write
+
+# Imported on first use, so the GUI starts without them: difflib (matching), http.server (sign-in
+# callback), urllib.request (the network), webbrowser (opening the sign-in page).
 
 AUTH_URL = 'https://accounts.spotify.com/authorize'
 TOKEN_URL = 'https://accounts.spotify.com/api/token'
@@ -102,6 +100,7 @@ def make_verifier() -> str:
 
 
 def pkce_challenge(verifier: str) -> str:
+    import hashlib
     digest = hashlib.sha256(verifier.encode('ascii')).digest()
     return base64.urlsafe_b64encode(digest).rstrip(b'=').decode('ascii')
 
@@ -153,6 +152,8 @@ def resolve_client_id(explicit: str | None = None) -> str:
 def default_transport(method, url, headers, body, timeout=30):
     """transport(method, url, headers, body_bytes|None, timeout) -> (status, headers, body_bytes).
     Raises OSError on network failure."""
+    import urllib.error
+    import urllib.request
     req = urllib.request.Request(url, data=body, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -171,14 +172,15 @@ _PAGE = ('<!doctype html><meta charset="utf-8"><title>DankCrawl</title>'
          '<div style="text-align:center"><h1 style="color:%s">%s</h1><p>%s</p></div></body>')
 
 
-class _Server(http.server.HTTPServer):
-    allow_reuse_address = False  # on Windows reuse would let two apps share a port
-
-
 class CallbackServer:
     """One-shot listener on 127.0.0.1 for the OAuth redirect."""
 
     def __init__(self, state: str, ports=None):
+        import http.server
+
+        class _Server(http.server.HTTPServer):
+            allow_reuse_address = False  # on Windows reuse would let two apps share a port
+
         self.state = state
         self.result = None  # {'code': ...} or {'error': ...}
         outer = self
@@ -248,7 +250,7 @@ class CallbackServer:
     def close(self):
         try:
             self.httpd.server_close()
-        except Exception:
+        except OSError:
             pass
 
 
@@ -262,23 +264,28 @@ _FEAT = re.compile(r'[\(\[]\s*(feat\.?|ft\.?|featuring|with)\s[^\)\]]*[\)\]]|\s(
 _VERSION_WORDS = ('live', 'remix', 'instrumental', 'karaoke', 'cover', 'tribute')
 
 
+@lru_cache(maxsize=4096)
+def _fold_char(ch: str) -> str:
+    d = unicodedata.normalize('NFKD', ch)
+    return d[0] if d and d[0].isascii() else ch   # strip accents only from Latin letters
+
+
 def _fold(s: str) -> str:
-    out = []
-    for ch in unicodedata.normalize('NFC', s or ''):
-        d = unicodedata.normalize('NFKD', ch)
-        if d and d[0].isascii():  # strip accents only from Latin letters
-            out.append(d[0])
-        else:
-            out.append(ch)
-    return ''.join(out)
+    s = unicodedata.normalize('NFC', s or '')
+    return s if s.isascii() else ''.join(c if c.isascii() else _fold_char(c) for c in s)
 
 
+_NON_ALNUM = re.compile(r'[\W_]+')   # \w is str.isalnum() plus the underscore
+
+
+@lru_cache(maxsize=16384)
 def norm(s: str | None) -> str:
-    s = _fold(s or '').casefold().replace('&', ' and ')
-    s = ''.join(c if c.isalnum() else ' ' for c in s)
-    return ' '.join(s.split())
+    """Lower-case, accent-folded, punctuation-free form for comparing names. Cached: matching
+    normalises the same few strings over and over."""
+    return _NON_ALNUM.sub(' ', _fold(s or '').casefold().replace('&', ' and ')).strip()
 
 
+@lru_cache(maxsize=4096)
 def clean_title(title: str, keep_feat: bool = False) -> str:
     t = title or ''
     for _ in range(3):
@@ -293,20 +300,28 @@ def _tokens(s: str) -> set:
     return set(norm(s).split())
 
 
+@lru_cache(maxsize=16384)
+def _ratio(a: str, b: str) -> float:
+    import difflib
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
 def title_similarity(a: str, b: str) -> float:
     na, nb = norm(a), norm(b)
     if not na or not nb:
         return 0.0
     if na == nb:
         return 1.0
-    seq = difflib.SequenceMatcher(None, na, nb).ratio()
     ta, tb = set(na.split()), set(nb.split())
     tok = len(ta & tb) / max(len(ta), len(tb))
-    return 0.6 * seq + 0.4 * tok
+    return 0.6 * _ratio(na, nb) + 0.4 * tok
+
+
+_ARTIST_SPLIT = re.compile(r'\s*(?:,|;|/|&|\band\b|\bx\b|\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b)\s*', re.I)
 
 
 def _split_artists(s: str) -> list:
-    parts = re.split(r'\s*(?:,|;|/|&|\band\b|\bx\b|\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b)\s*', s or '', flags=re.I)
+    parts = _ARTIST_SPLIT.split(s or '')
     return [p for p in (norm(p) for p in parts) if p]
 
 
@@ -321,9 +336,9 @@ def artist_overlap(q_artist: str, cand_artists: list) -> bool:
             if q == c:
                 return True
             tq, tc = set(q.split()), set(c.split())
-            if tq and tc and (tq <= tc or tc <= tq) and min(len(tq), len(tc)) >= 1 and len(q) > 2 and len(c) > 2:
+            if tq and tc and (tq <= tc or tc <= tq) and len(q) > 2 and len(c) > 2:
                 return True
-            if difflib.SequenceMatcher(None, q, c).ratio() >= 0.88:
+            if _ratio(q, c) >= 0.88:
                 return True
     return False
 
@@ -376,11 +391,11 @@ def build_searches(q: Query) -> list:
 # ---------------------------------------------------------------- the engine
 
 class SpotifyLink:
-    def __init__(self, client_id=None, transport=None, open_browser=webbrowser.open, now=time.time,
+    def __init__(self, client_id=None, transport=None, open_browser=None, now=time.time,
                  sleep=time.sleep, ports=None, token_file=None):
         self._explicit_id = client_id
         self._transport = transport or default_transport
-        self._open = open_browser
+        self._open = open_browser   # None: webbrowser.open, imported when signing in
         self._now = now
         self._sleep = sleep
         self._ports = list(ports) if ports else list(DEFAULT_PORTS)
@@ -411,8 +426,9 @@ class SpotifyLink:
         t = self._tokens
         if not isinstance(t, dict) or not t.get('refresh_token'):
             return None
-        if t.get('client_id') != cid:  # tokens belong to another Spotify app
-            self.sign_out()
+        if t.get('client_id') != cid:
+            # Tokens belong to another Spotify app: unusable here, but not ours to delete.
+            # The next sign-in overwrites them.
             return None
         return t
 
@@ -421,14 +437,7 @@ class SpotifyLink:
         path = self._path()
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            tmp = path + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(t, f)
-            try:
-                os.chmod(tmp, 0o600)
-            except OSError:
-                pass
-            os.replace(tmp, path)
+            atomic_write(path, lambda f: json.dump(t, f), private=True, encoding='utf-8')
         except OSError:
             pass  # still works for this session, just won't persist
 
@@ -455,7 +464,9 @@ class SpotifyLink:
         if status != 200:
             err = j.get('error', '')
             if err == 'invalid_grant':
-                raise SpotifyError('Spotify sign-in expired or was rejected. Please sign in again.')
+                rejected = SpotifyError('Spotify sign-in expired or was rejected. Please sign in again.')
+                rejected.rejected = True   # Spotify says the sign-in is dead: the only case to forget it
+                raise rejected
             raise SpotifyError('Spotify sign-in failed (HTTP %d %s %s).' % (
                 status, err, j.get('error_description', '')))
         return j
@@ -474,8 +485,10 @@ class SpotifyLink:
         try:
             j = self._token_request({'grant_type': 'refresh_token',
                                      'refresh_token': t['refresh_token'], 'client_id': self._cid()})
-        except SpotifyError:
-            self.sign_out()
+        except SpotifyError as e:
+            # A network blip or a 5xx must not log the user out; only a rejected grant does.
+            if getattr(e, 'rejected', False):
+                self.sign_out()
             raise
         self._store_token_response(j, t['refresh_token'])
 
@@ -570,8 +583,11 @@ class SpotifyLink:
         try:
             say('Opening your browser to sign in to Spotify...')
             try:
+                if self._open is None:
+                    import webbrowser
+                    self._open = webbrowser.open
                 self._open(url)
-            except Exception:
+            except Exception:   # no browser available: the user can still open the link by hand
                 pass
             say('Waiting for you to approve in the browser...')
             res = server.wait(AUTH_TIMEOUT_SEC, stop)
@@ -671,6 +687,7 @@ class SpotifyLink:
 # ---------------------------------------------------------------- helpers for the GUI
 
 def save_missing(matches, path):
+    import csv
     with open(path, 'w', encoding='utf-8-sig', newline='') as f:
         w = csv.writer(f)
         w.writerow(['status', 'artist', 'title', 'album', 'duration_sec', 'ref', 'best_guess', 'best_url'])
