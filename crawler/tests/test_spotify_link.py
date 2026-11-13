@@ -175,6 +175,11 @@ class TestTokens(Base):
         old = sl.client_id_file
         sl.client_id_file = lambda: path
         self.addCleanup(setattr, sl, 'client_id_file', old)
+        # A machine that builds the exe has crawler/_baked_client.py; block it here.
+        saved = sys.modules.get('_baked_client', 0)
+        sys.modules['_baked_client'] = None
+        self.addCleanup(lambda: sys.modules.pop('_baked_client', None) if saved == 0
+                        else sys.modules.__setitem__('_baked_client', saved))
         with self.assertRaises(sl.NeedsClientId):
             sl.resolve_client_id(None)
         with open(path, 'w') as f:

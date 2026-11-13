@@ -138,6 +138,13 @@ def resolve_client_id(explicit: str | None = None) -> str:
             return cid
     except (OSError, ValueError, AttributeError):
         pass
+    # The ID this build shipped with (crawler/_baked_client.py, bundled by build.ps1).
+    try:
+        from _baked_client import CLIENT_ID as baked   # type: ignore
+        if isinstance(baked, str) and baked.strip():
+            return baked.strip()
+    except ImportError:
+        pass
     raise NeedsClientId('No Spotify Client ID found. Put it in ' + client_id_file())
 
 

@@ -22,3 +22,4 @@ data/*.json
 # generated in CI by `npm run seal`: ciphertext and aggregates, rebuilt every deploy
 public/data/*
 data/unmatched.txt
+crawler/_baked_client.py

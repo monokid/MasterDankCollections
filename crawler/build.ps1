@@ -8,6 +8,7 @@ python -m PyInstaller --noconfirm --onefile --windowed --name DankCrawl `
   --hidden-import mutagen --collect-submodules mutagen `
   --collect-all miniaudio --hidden-import _cffi_backend `
   --additional-hooks-dir pyi_hooks `
+  --hidden-import _baked_client `
   --exclude-module numpy --exclude-module PIL --exclude-module pytest `
   dankcrawl.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed ($LASTEXITCODE)" }
