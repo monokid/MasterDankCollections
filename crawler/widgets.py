@@ -7,8 +7,25 @@ these is a small Canvas that paints the gradient itself.
 from __future__ import annotations
 
 import colorsys
+import math
+import random
+import time
 import tkinter as tk
 import tkinter.font as tkfont
+
+# The cosmic palette. dankcrawl.py and every widget below take their colours
+# from here, so a tweak is made once.
+BG = "#0b0a1a"
+PANEL = "#151233"
+PANEL_HI = "#221f45"
+FG = "#e8e4ff"
+DIM = "#8f88c4"
+ACCENT = "#b388ff"
+OK = "#7cf5c4"
+BAD = "#ff7b9c"
+WARN = "#ffc46b"
+GREY = "#7a74a8"
+ART = "#5b4f9e"
 
 # Tk does no font fallback of its own: naming a missing family silently gives
 # you the default. So the family is resolved against what is actually installed.
@@ -74,6 +91,14 @@ class FunkyTitle(tk.Canvas):
             x += self.font.measure(ch)
         self._paint()
 
+    def set_text(self, text: str):
+        """Swap the wordmark (one per tab) without rebuilding the widget."""
+        if text == self.text:
+            return
+        self.text = text
+        self.configure(width=self.font.measure(text) + 4)
+        self._layout()
+
     def _paint(self):
         n = max(len(self._items), 1)
         for item, i in self._items:
@@ -105,7 +130,33 @@ class CosmicBar(tk.Canvas):
         self.indeterminate = False
         self.phase = 0.0
         self._job = None
+        self._spin_end = 0.0
         self.bind("<Configure>", lambda _e: self._redraw())
+
+    def spin(self, seconds: float = 4.0):
+        """Easter egg: the whole spectrum rotates through the bar for a moment."""
+        if self._spin_end:
+            return
+        self._spin_end = time.monotonic() + seconds
+        self._spin_tick()
+
+    def _spin_tick(self):
+        if time.monotonic() >= self._spin_end:
+            self._spin_end = 0.0
+            self._redraw()
+            return
+        self._redraw()
+        self.after(33, self._spin_tick)
+
+    def _draw_spin(self, w, h):
+        off = (time.monotonic() * 1.4) % 1.0
+        x = 0
+        while x < w:
+            t = (x / w + off) % 1.0
+            tri = 1.0 - abs(2.0 * t - 1.0)
+            self.create_rectangle(x, 0, x + self.STEP, h, outline="",
+                                  fill=hsv_hex(self.HUE_FROM - tri * self.HUE_SPAN, 0.7, 1.0))
+            x += self.STEP
 
     def set_value(self, fraction: float):
         self.value = max(0.0, min(1.0, fraction))
@@ -149,6 +200,9 @@ class CosmicBar(tk.Canvas):
             return
 
         self.create_rectangle(0, 0, w, h, fill=self.trough, outline="")
+        if self._spin_end:
+            self._draw_spin(w, h)
+            return
 
         if self.indeterminate:
             # A comet of light sweeping the trough, with a soft tail.
@@ -178,3 +232,179 @@ class CosmicBar(tk.Canvas):
         if 0 < filled < w:
             self.create_rectangle(max(filled - 3, 0), 0, filled, h,
                                   fill="#ffffff", outline="")
+
+
+class AnimStrip(tk.Canvas):
+    """A thin header strip: drifting stars and a slowly pulsing amoeba.
+
+    The blob pulses faster and shifts colour quicker while `busy`. Cheap by
+    design: ~14 fps, about fifty canvas items, and it draws nothing at all while
+    the window is minimised or unfocused (the owner flips `active`).
+    """
+
+    FRAME_MS = 72
+
+    def __init__(self, parent, bg: str = BG, height: int = 40):
+        super().__init__(parent, height=height, bg=bg, highlightthickness=0, bd=0)
+        self.busy = False
+        self.active = True
+        rng = random.Random(5)
+        # x is a 0..1 fraction of the width so a resize needs no bookkeeping.
+        self.stars = [[rng.random(), rng.random(), 0.05 + rng.random() * 0.25,
+                       rng.choice((1, 1, 2)), rng.random() * 6.28]
+                      for _ in range(46)]
+        self.t = 0.0          # animation clock, runs faster when busy
+        self.drift = 0.0
+        self._last = time.monotonic()
+        self._swarm_start = 0.0
+        self._swarm_len = 0.0
+        self._tick()
+
+    def set_busy(self, busy: bool):
+        self.busy = busy
+
+    def set_active(self, active: bool):
+        self.active = active
+        self._last = time.monotonic()      # no giant time-step on wake
+
+    def swarm(self, seconds: float = 5.0):
+        """Easter egg: the amoeba splits into a swarm, then pulls itself together."""
+        self._swarm_start = time.monotonic()
+        self._swarm_len = seconds
+
+    def _blob(self, cx, cy, radius, hue, wob_t):
+        pts = []
+        n = 20
+        for i in range(n):
+            a = i / n * 2 * math.pi
+            r = radius * (1 + 0.13 * math.sin(3 * a + wob_t * 1.3)
+                          + 0.08 * math.sin(5 * a - wob_t * 0.9))
+            pts += [cx + math.cos(a) * r * 1.35, cy + math.sin(a) * r * 0.9]
+        self.create_polygon(pts, smooth=True, fill=hsv_hex(hue, 0.55, 0.5),
+                            outline=hsv_hex(hue, 0.45, 1.0), width=1)
+        # the nucleus: a brighter spot that sits a little off-centre and wanders
+        nx = cx + math.cos(wob_t * 0.7) * radius * 0.25
+        ny = cy + math.sin(wob_t * 0.9) * radius * 0.18
+        nr = radius * 0.32
+        self.create_oval(nx - nr, ny - nr, nx + nr, ny + nr, outline="",
+                         fill=hsv_hex(hue + 0.05, 0.7, 0.95))
+
+    def _tick(self):
+        delay = self.FRAME_MS
+        if self.active and self.winfo_ismapped():
+            self._draw()
+        else:
+            delay = 500
+        self.after(delay, self._tick)
+
+    def _draw(self):
+        now = time.monotonic()
+        dt = min(now - self._last, 0.25)
+        self._last = now
+        rate = 3.2 if self.busy else 1.0
+        self.t += dt * rate
+        self.drift += dt * rate
+        w, h = self.winfo_width(), self.winfo_height()
+        if w <= 1:
+            return
+        self.delete("all")
+        for st in self.stars:
+            st[0] = (st[0] - st[2] * dt * rate * 0.08) % 1.0
+            tw = 0.5 + 0.5 * math.sin(self.t * 2 + st[4])
+            col = hsv_hex(0.68 + 0.1 * tw, 0.35, 0.35 + 0.5 * tw)
+            x, y = st[0] * w, 3 + st[1] * (h - 6)
+            self.create_rectangle(x, y, x + st[3], y + st[3], fill=col, outline="")
+        # the amoeba ambles left and right across the strip
+        cy = h / 2
+        span = max(w - 160, 10)
+        cx = 80 + (0.5 + 0.5 * math.sin(self.drift * 0.18)) * span
+        radius = 11 + 2.2 * math.sin(self.t * 1.6)
+        hue = 0.74 + 0.1 * math.sin(self.t * (0.5 if not self.busy else 1.6))
+        sw = 0.0
+        if self._swarm_len:
+            el = now - self._swarm_start
+            if el >= self._swarm_len:
+                self._swarm_len = 0.0
+            else:
+                # split out over 0.8 s, hold, and fold back in over the last 0.8 s
+                sw = max(0.0, min(1.0, el / 0.8, (self._swarm_len - el) / 0.8))
+        if sw > 0:
+            for k in range(9):
+                a = self.t * (0.8 + k * 0.07) + k * 0.7
+                dx = math.cos(a) * (30 + 22 * (k % 3)) * sw * 1.4
+                dy = math.sin(a * 1.3) * (h * 0.32) * sw
+                self._blob(cx + dx, cy + dy, 5 + 1.2 * math.sin(self.t * 2 + k),
+                           hue + k * 0.06, self.t + k)
+            self._blob(cx, cy, radius * (1 - 0.5 * sw), hue, self.t)
+        else:
+            self._blob(cx, cy, radius, hue, self.t)
+
+
+class Ticker(tk.Text):
+    """A one-line status strip whose letters cycle through the spectrum.
+
+    It is a Text widget (so each character can carry a tag) but never grows: the
+    line is rewritten in place and only the *tag colours* animate, ~8 times a
+    second. Flavour text rotates every few seconds.
+    """
+
+    NTAGS = 16
+    SPARKS = ["✦", "✧", "⋆", "✶", "✷"]
+    FPS_MS = 125
+    SWAP_EVERY = 24      # frames between flavour lines (~3 s)
+
+    def __init__(self, parent, bg: str, font):
+        super().__init__(parent, height=1, bg=bg, fg=DIM, bd=0, highlightthickness=0,
+                         font=font, wrap="none", state="disabled", cursor="arrow",
+                         takefocus=0, insertwidth=0)
+        for k in range(self.NTAGS):
+            self.tag_configure("rb%d" % k)
+        self.running = False
+        self.frame = 0
+        self.flavours = []
+        self._idx = 0
+        self._job = None
+
+    def _write(self, text: str):
+        self.configure(state="normal")
+        self.delete("1.0", "end")
+        for i, ch in enumerate(text):
+            self.insert("end", ch, "rb%d" % (i % self.NTAGS))
+        self.configure(state="disabled")
+
+    def start(self, flavours: list):
+        self.flavours = list(flavours) or ["working"]
+        self._idx = random.randrange(len(self.flavours))
+        self.frame = 0
+        self.running = True
+        self._compose()
+        if self._job is None:
+            self._tick()
+
+    def stop(self):
+        self.running = False
+        if self._job is not None:
+            try:
+                self.after_cancel(self._job)
+            except tk.TclError:
+                pass
+            self._job = None
+        self._write("")
+
+    def _compose(self):
+        spark = " ".join(self.SPARKS)
+        self._write("%s  %s...  %s" % (spark, self.flavours[self._idx % len(self.flavours)], spark))
+
+    def _tick(self):
+        if not self.running:
+            self._job = None
+            return
+        self.frame += 1
+        if self.frame % self.SWAP_EVERY == 0:
+            self._idx += 1
+            self._compose()
+        base = self.frame * 0.045
+        for k in range(self.NTAGS):
+            self.tag_configure("rb%d" % k,
+                               foreground=hsv_hex(base + k / self.NTAGS, 0.55, 1.0))
+        self._job = self.after(self.FPS_MS, self._tick)
